@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+# Local state and secrets: this project makes an explicit temporary exception for client_defaults.json
+.env
+.env.*
+*.local.json
+connection.local.json
+.orbitclip_patch_backups/
+.orbitclip_crash.log
+*.log
+*secret*.json
+*identity*.json
+*pair*.json
+# OS
+.DS_Store
+Thumbs.db
