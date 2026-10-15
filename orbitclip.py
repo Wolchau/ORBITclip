@@ -244,6 +244,7 @@ class OrbitPill(QWidget):
             menu.addAction('Связь и переписка',self.app.open_chat)
             menu.addAction('Устройства онлайн…',self.app.open_online)
             menu.addAction('Общие пространства…',self.app.open_workspaces)
+            menu.addAction('SQL Explorer · база и ER-схема…',self.app.open_sql_explorer)
             menu.addAction('Быстрый OCR…',self.app.capture_ocr)
             menu.addAction('Снимок экрана и редактор…',self.app.capture_screen)
             menu.addAction('Настройки…',self.app.open_settings)
@@ -681,6 +682,7 @@ class VaultWindow(QWidget):
         add(menu,'document','Снимок экрана и редактор…',self.app.capture_screen)
         add(menu,'remote','Управление пространствами…',self.app.open_workspaces)
         add(menu,'remote','Мессенджер…',self.app.open_chat)
+        add(menu,'sql','SQL Explorer · ER-схема…',self.app.open_sql_explorer)
         menu.addSeparator()
         add(menu,'pause' if not self.app.paused else 'check',
             'Приостановить запись истории' if not self.app.paused else 'Возобновить запись',self.toggle_capture)
@@ -1806,7 +1808,7 @@ class OrbitApp:
         self._last_clip=''
         self.clipboard=self.qt.clipboard();self.clipboard.dataChanged.connect(self.on_clipboard)
         self.toast=FloatingToast();self.bubble=ScrollBubble()
-        self.history=None;self.chat=None;self.online_window=None;self.preferences=None;self.workspace_window=None;self.capture_window=None;self.screenshot_editor=None
+        self.history=None;self.chat=None;self.online_window=None;self.preferences=None;self.workspace_window=None;self.sql_explorer=None;self.capture_window=None;self.screenshot_editor=None
         self.tour_seen=bool(self.settings.get('tour_seen',False))
         raw_unread=self.settings.get('unread_peers',{})
         self.unread_peers={str(k):max(0,int(v)) for k,v in raw_unread.items() if isinstance(k,str) and isinstance(v,int) and not isinstance(v,bool)} if isinstance(raw_unread,dict) else {}
@@ -1879,6 +1881,7 @@ class OrbitApp:
         menu.addAction('Быстрый OCR',lambda checked=False:self.capture_ocr())
         menu.addAction('Редактор снимка',lambda checked=False:self.capture_screen())
         menu.addSeparator()
+        menu.addAction('SQL Explorer…',lambda checked=False:self.open_sql_explorer())
         menu.addAction('Настройки…',lambda checked=False:self.open_settings())
         self.tray_clock_action=menu.addAction('Показать виджет часов',lambda checked=False:self.set_clock_hidden_windows(not self.hide_clock_windows))
         menu.addSeparator()
@@ -1977,6 +1980,15 @@ class OrbitApp:
         if not value or (self.paused and not force):return
         self.vault.add(value,source_app=foreground_app())
         if self.history and self.history.isVisible():self.history.refresh()
+
+    def open_sql_explorer(self):
+        # The explorer is independent and never closes merely on focus loss.
+        from orbit_sql_ui import SQLExplorer
+        if self.sql_explorer is None:
+            self.sql_explorer=SQLExplorer()
+        self.sql_explorer.show()
+        self.sql_explorer.raise_()
+        self.sql_explorer.activateWindow()
 
     def open_workspaces(self):
         if self.workspace_window is None:self.workspace_window=WorkspaceWindow(self)

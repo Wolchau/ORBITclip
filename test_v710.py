@@ -60,7 +60,7 @@ class RetiredTourTests(unittest.TestCase):
         self.assertNotIn('QMovie',source)
 
     def test_client_version_updated_without_protocol_change(self):
-        self.assertEqual(CLIENT_VERSION,'7.2.2')
+        self.assertEqual(CLIENT_VERSION,'7.3.0')
         self.assertIn('QT_CLIENT_VERSION = CLIENT_VERSION',source)
         self.assertNotIn('Возможности ✦',source)
 
