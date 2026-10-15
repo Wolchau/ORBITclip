@@ -1,232 +1,146 @@
-"""ORBITclip SQL Explorer core: read-only PostgreSQL metadata and local annotations.
+"""PostgreSQL metadata discovery and private, annotated SQL workspaces.
 
-Database passwords are never persisted. All untrusted names are values, not SQL.
+Never saves credentials. PostgreSQL metadata is accessed read-only, with user
+supplied identifiers always treated as query parameters rather than SQL.
 """
 from __future__ import annotations
-
 import hashlib
 import json
 import os
 from pathlib import Path
 import tempfile
 
-PROJECT_DIR = Path.home() / '.orbitclip_sql_projects'
-SSL_MODES = ('verify-full', 'verify-ca', 'require', 'prefer', 'disable')
+PROJECT_DIR=Path.home()/'.orbitclip_sql_projects'
 
 
-def profile_key(host: str, port: int, database: str, user: str) -> str:
-    parts = [str(host).strip().lower(), str(int(port)), str(database).strip(), str(user).strip()]
-    if not parts[0] or not parts[2] or not parts[3]:
-        raise ValueError('Укажи сервер, базу и пользователя')
-    return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()[:24]
+def profile_key(host,port,database,user):
+    raw='|'.join(map(str,[host.strip().lower(),int(port),database.strip(),user.strip()]))
+    if not host.strip() or not database.strip() or not user.strip():
+        raise ValueError('Укажи сервер, базу данных и пользователя')
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:20]
 
 
-def table_id(schema: str, name: str) -> str:
-    return json.dumps([schema, name], ensure_ascii=False, separators=(',', ':'))
+class SQLProject:
+    def __init__(self, key, directory=None):
+        if not key.isalnum():raise ValueError('Invalid project ID')
+        self.path=Path(directory or PROJECT_DIR)/(key+'.json')
+        self.data={'selected':[],'comments':{},'joins':[],'positions':{}}
+        if self.path.exists():
+            found=json.loads(self.path.read_text('utf-8'))
+            if isinstance(found,dict):
+                for name in self.data:
+                    if name in found and isinstance(found[name],type(self.data[name])):
+                        self.data[name]=found[name]
+
+    def save(self):
+        self.path.parent.mkdir(parents=True,exist_ok=True)
+        fd,temp=tempfile.mkstemp(prefix='.sql-',suffix='.tmp',dir=self.path.parent)
+        try:
+            with os.fdopen(fd,'w',encoding='utf-8') as file:
+                json.dump(self.data,file,ensure_ascii=False,indent=2)
+            os.chmod(temp,0o600)
+            os.replace(temp,self.path)
+        finally:
+            if os.path.exists(temp):os.remove(temp)
+
+    def select(self,tables):
+        self.data['selected']=list(dict.fromkeys(tables));self.save()
+
+    def annotate(self,table,column,comment):
+        self.data['comments'][table+'.'+column]=str(comment)[:3000];self.save()
+
+    def relation(self,left,left_column,right,right_column):
+        if not all([left,left_column,right,right_column]):raise ValueError('Заполни обе таблицы и поля')
+        relation={'left':left,'left_column':left_column,'right':right,'right_column':right_column}
+        if relation not in self.data['joins']:
+            self.data['joins'].append(relation);self.save()
+        return relation
+
+    def position(self,table,x,y):
+        self.data['positions'][table]=[float(x),float(y)];self.save()
 
 
-def split_table_id(identity: str) -> tuple[str, str]:
-    data = json.loads(identity)
-    if not isinstance(data, list) or len(data) != 2 or not all(isinstance(s, str) and s for s in data):
-        raise ValueError('Некорректный идентификатор таблицы')
-    return data[0], data[1]
+class PostgreSQLCatalog:
+    """Introspection only. The DB role should additionally be restricted to read-only."""
+    def __init__(self,host,port,database,user,password,sslmode='prefer'):
+        self.config=dict(host=host.strip(),port=int(port),dbname=database.strip(),user=user.strip(),
+                         password=password,sslmode=sslmode,connect_timeout=7)
+        if sslmode not in ('verify-full','verify-ca','require','prefer','disable'):
+            raise ValueError('Invalid TLS mode')
+        self.conn=None
 
-
-def new_project() -> dict:
-    return {'schema_version': 1, 'selected': [], 'notes': {}, 'joins': [], 'positions': {}}
-
-
-def validate_project(project: dict) -> dict:
-    if not isinstance(project, dict) or project.get('schema_version') != 1:
-        raise ValueError('Неподдерживаемый формат проекта SQL')
-    selected = project.get('selected', [])
-    if not isinstance(selected, list) or len(selected) > 10000:
-        raise ValueError('Некорректный список таблиц')
-    selected = list(dict.fromkeys(s for s in selected if isinstance(s, str) and _valid_table(s)))
-    notes = project.get('notes', {})
-    joins = project.get('joins', [])
-    positions = project.get('positions', {})
-    if not isinstance(notes, dict) or not isinstance(joins, list) or not isinstance(positions, dict):
-        raise ValueError('Некорректные метаданные')
-    # Limit file size and restrict notes to strings; never store connection credentials.
-    clean_notes = {str(k)[:500]: v[:2000] for k, v in notes.items()
-                   if isinstance(k, str) and isinstance(v, str)}
-    clean_joins = []
-    for j in joins[:2000]:
-        if not isinstance(j, dict):
-            continue
-        keys = ('left', 'left_column', 'right', 'right_column')
-        if all(isinstance(j.get(k), str) and j.get(k) for k in keys) and _valid_table(j['left']) and _valid_table(j['right']):
-            clean_joins.append({k: j[k][:300] for k in keys})
-    clean_positions = {}
-    for key, val in positions.items():
-        if _valid_table(key) and isinstance(val, list) and len(val) == 2 and all(isinstance(p, (int, float)) and not isinstance(p, bool) and abs(p) <= 1_000_000 for p in val):
-            clean_positions[key] = [float(val[0]), float(val[1])]
-    return {'schema_version': 1, 'selected': selected, 'notes': clean_notes,
-            'joins': clean_joins, 'positions': clean_positions}
-
-
-def _valid_table(v):
-    try:
-        split_table_id(v)
-        return True
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return False
-
-
-def load_project(key: str, directory: Path = PROJECT_DIR) -> dict:
-    path = directory / (key + '.json')
-    if not path.exists():
-        return new_project()
-    if path.stat().st_size > 4_000_000:
-        raise ValueError('Проект SQL слишком большой')
-    return validate_project(json.loads(path.read_text(encoding='utf-8')))
-
-
-def save_project(key: str, project: dict, directory: Path = PROJECT_DIR) -> None:
-    if not isinstance(key, str) or len(key) != 24 or any(c not in '0123456789abcdef' for c in key):
-        raise ValueError('Неверный ключ профиля')
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    data = json.dumps(validate_project(project), ensure_ascii=False, indent=2).encode('utf-8')
-    handle, tmp = tempfile.mkstemp(prefix='.orbit-sql-', dir=directory)
-    try:
-        with os.fdopen(handle, 'wb') as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, directory / (key + '.json'))
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-
-
-def field_note_key(identity: str, column: str) -> str:
-    return identity + '::' + column
-
-
-def manual_join(left: str, left_column: str, right: str, right_column: str) -> dict:
-    split_table_id(left)
-    split_table_id(right)
-    if not left_column.strip() or not right_column.strip():
-        raise ValueError('Выбери поля соединения')
-    return {'left': left, 'left_column': left_column, 'right': right, 'right_column': right_column}
-
-
-TABLES_SQL = '''
-SELECT n.nspname, c.relname, c.relkind, COALESCE(obj_description(c.oid, 'pg_class'), '')
-FROM pg_catalog.pg_class c
-JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-WHERE c.relkind IN ('r','p','v','m','f')
-  AND n.nspname NOT IN ('pg_catalog','information_schema')
-  AND n.nspname NOT LIKE 'pg_toast%'
-  AND has_schema_privilege(n.oid,'USAGE')
-  AND (has_table_privilege(c.oid,'SELECT') OR has_any_column_privilege(c.oid,'SELECT'))
-ORDER BY n.nspname, c.relname
-LIMIT 10001
-'''
-
-COLUMNS_SQL = '''
-SELECT a.attname, pg_catalog.format_type(a.atttypid,a.atttypmod),
-       NOT a.attnotnull, COALESCE(pg_catalog.col_description(a.attrelid,a.attnum),''),
-       a.attnum
-FROM pg_catalog.pg_attribute a
-JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
-JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname=%s AND c.relname=%s AND c.relkind IN ('r','p','v','m','f')
-  AND a.attnum > 0 AND NOT a.attisdropped
-  AND has_schema_privilege(n.oid,'USAGE')
-  AND (has_table_privilege(c.oid,'SELECT') OR has_column_privilege(c.oid,a.attnum,'SELECT'))
-ORDER BY a.attnum
-'''
-
-CONSTRAINTS_SQL = '''
-SELECT co.contype, co.conname,
-       ARRAY(SELECT a.attname FROM unnest(co.conkey) WITH ORDINALITY k(attnum, ord)
-             JOIN pg_catalog.pg_attribute a ON a.attrelid=co.conrelid AND a.attnum=k.attnum
-             ORDER BY k.ord),
-       rn.nspname, rc.relname,
-       ARRAY(SELECT a.attname FROM unnest(co.confkey) WITH ORDINALITY k(attnum, ord)
-             JOIN pg_catalog.pg_attribute a ON a.attrelid=co.confrelid AND a.attnum=k.attnum
-             ORDER BY k.ord)
-FROM pg_catalog.pg_constraint co
-JOIN pg_catalog.pg_class c ON c.oid=co.conrelid
-JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-LEFT JOIN pg_catalog.pg_class rc ON rc.oid=co.confrelid
-LEFT JOIN pg_catalog.pg_namespace rn ON rn.oid=rc.relnamespace
-WHERE n.nspname=%s AND c.relname=%s AND co.contype IN ('p','u','f')
-ORDER BY co.contype, co.conname
-'''
-
-
-def pg_connect(config: dict):
-    """Return a PostgreSQL connection restricted to read-only transactions."""
-    try:
+    def connect(self):
         import psycopg
-    except ImportError as e:
-        raise RuntimeError('Для PostgreSQL установи: python -m pip install "psycopg[binary]>=3.2,<4"') from e
-    sslmode = config.get('sslmode', 'verify-full')
-    if sslmode not in SSL_MODES:
-        raise ValueError('Недопустимый режим TLS')
-    conn = psycopg.connect(
-        host=config['host'], port=int(config['port']), dbname=config['database'],
-        user=config['user'], password=config['password'], sslmode=sslmode,
-        connect_timeout=8, application_name='ORBITclip SQL Explorer',
-        options='-c default_transaction_read_only=on -c statement_timeout=12000')
-    conn.read_only = True
-    return conn
+        self.conn=psycopg.connect(**self.config,autocommit=True)
+        # Cannot enable write operations via the Explorer session.
+        with self.conn.cursor() as cursor:
+            cursor.execute("SET default_transaction_read_only = on")
+            cursor.execute("SET statement_timeout = '12000ms'")
+        return self
 
+    def close(self):
+        if self.conn is not None:self.conn.close()
+        self.conn=None
 
-def discover_tables(config: dict) -> list[dict]:
-    with pg_connect(config) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(TABLES_SQL)
-            rows = cursor.fetchall()
-    if len(rows) > 10000:
-        raise ValueError('Более 10 000 таблиц: сузь права пользователя БД')
-    return [{'id': table_id(schema, table), 'schema': schema, 'name': table,
-             'kind': kind, 'comment': comment} for schema, table, kind, comment in rows]
+    def _query(self,query,args=()):
+        if self.conn is None:raise RuntimeError('Нет подключения к базе')
+        with self.conn.cursor() as cursor:
+            cursor.execute(query,args)
+            names=[getattr(c,'name',c[0]) for c in cursor.description]
+            return [dict(zip(names,record)) for record in cursor.fetchall()]
 
+    def tables(self):
+        return self._query("""
+            SELECT n.nspname AS schema, c.relname AS name,
+                   CASE c.relkind WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view'
+                     ELSE 'table' END AS kind,
+                   COALESCE(obj_description(c.oid, 'pg_class'),'') AS comment
+            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE c.relkind IN ('r','p','v','m')
+              AND n.nspname NOT IN ('pg_catalog','information_schema')
+              AND n.nspname NOT LIKE 'pg_toast%'
+            ORDER BY n.nspname,c.relname
+        """)
 
-def inspect_tables(config: dict, selected: list[str]) -> dict:
-    if len(selected) > 150:
-        raise ValueError('В одной схеме допускается до 150 рабочих таблиц')
-    details = {}
-    with pg_connect(config) as conn:
-        with conn.cursor() as cursor:
-            for identity in selected:
-                schema, name = split_table_id(identity)
-                cursor.execute(COLUMNS_SQL, (schema, name))
-                cols = cursor.fetchall()
-                if not cols:
-                    continue
-                cursor.execute(CONSTRAINTS_SQL, (schema, name))
-                rows = cursor.fetchall()
-                pk = {col for typ, _, names, _, _, _ in rows if typ == 'p' for col in names}
-                unique = {col for typ, _, names, _, _, _ in rows if typ == 'u' and len(names) == 1 for col in names}
-                foreign = {col for typ, _, names, _, _, _ in rows if typ == 'f' for col in names}
-                columns = [{'name': col, 'type': typ, 'nullable': nullable, 'db_comment': comment,
-                            'pk': col in pk, 'fk': col in foreign, 'unique': col in unique}
-                           for col, typ, nullable, comment, _ in cols]
-                edges = [{'name': cname, 'left': identity, 'left_columns': list(names),
-                          'right': table_id(rs, rn), 'right_columns': list(ref)}
-                         for ct, cname, names, rs, rn, ref in rows if ct == 'f' and rs and rn]
-                details[identity] = {'columns': columns, 'foreign_keys': edges}
-    return details
+    def columns(self,schema,table):
+        return self._query("""
+            SELECT a.attname AS name, format_type(a.atttypid,a.atttypmod) AS type,
+                   NOT a.attnotnull AS nullable,
+                   COALESCE(col_description(c.oid,a.attnum),'') AS comment,
+                   EXISTS (
+                      SELECT 1 FROM pg_constraint p
+                      WHERE p.conrelid=c.oid AND p.contype='p'
+                        AND a.attnum=ANY(p.conkey)
+                   ) AS primary_key
+            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            JOIN pg_attribute a ON a.attrelid=c.oid
+            WHERE n.nspname=%s AND c.relname=%s
+              AND a.attnum>0 AND NOT a.attisdropped
+            ORDER BY a.attnum
+        """,(schema,table))
 
-
-def visible_links(details: dict, project: dict) -> list[dict]:
-    selected = set(project['selected'])
-    result = []
-    for src, item in details.items():
-        if src not in selected:
-            continue
-        for fk in item['foreign_keys']:
-            if fk['right'] in selected:
-                for left_col, right_col in zip(fk['left_columns'], fk['right_columns']):
-                    result.append({'left': src, 'left_column': left_col, 'right': fk['right'],
-                                   'right_column': right_col, 'kind': 'FK'})
-    for j in project['joins']:
-        if j['left'] in selected and j['right'] in selected:
-            result.append(dict(j, kind='manual'))
-    return result
+    def foreign_keys(self,selected=None):
+        rows=self._query("""
+            SELECT ns.nspname AS source_schema, src.relname AS source_table,
+                   nt.nspname AS target_schema, dst.relname AS target_table,
+                   c.conname AS constraint_name,
+                   a.attname AS source_column, b.attname AS target_column,
+                   keys.pos AS position
+            FROM pg_constraint c
+            JOIN pg_class src ON src.oid=c.conrelid
+            JOIN pg_namespace ns ON ns.oid=src.relnamespace
+            JOIN pg_class dst ON dst.oid=c.confrelid
+            JOIN pg_namespace nt ON nt.oid=dst.relnamespace
+            JOIN LATERAL unnest(c.conkey,c.confkey) WITH ORDINALITY
+                 AS keys(source_attnum,target_attnum,pos) ON TRUE
+            JOIN pg_attribute a ON a.attrelid=src.oid AND a.attnum=keys.source_attnum
+            JOIN pg_attribute b ON b.attrelid=dst.oid AND b.attnum=keys.target_attnum
+            WHERE c.contype='f'
+            ORDER BY ns.nspname,src.relname,c.conname,keys.pos
+        """)
+        if selected is not None:
+            allowed=set(selected)
+            rows=[r for r in rows if
+                f"{r['source_schema']}.{r['source_table']}" in allowed and
+                f"{r['target_schema']}.{r['target_table']}" in allowed]
+        return rows
