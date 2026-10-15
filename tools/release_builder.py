@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build sanitized client and versioned installable patch for GitHub Releases."""
 from pathlib import Path
-from zipfile import ZipFile, ZIP_DEFLATED
+from zipfile import ZipFile, ZIP_DEFLATED, ZipInfo
 import argparse, ast, json, re, sys, shutil, hashlib
 
 ROOT=Path(__file__).resolve().parent.parent
@@ -32,6 +32,22 @@ def check_security():
             raise SystemExit('Suspected credential in '+str(p))
     return True
 
+def add_zip_member(zf, path, arcname):
+    """Keep macOS .command files executable even after a web upload.
+
+    GitHub's upload interface may store these files as 100644. Setting the
+    POSIX executable bit explicitly in the ZIP avoids a permission error
+    when users double-click a downloaded command script on macOS.
+    """
+    info=ZipInfo.from_file(path, arcname=arcname)
+    info.create_system=3  # Unix permission semantics for Archive Utility.
+    info.compress_type=ZIP_DEFLATED
+    if path.suffix.lower()=='.command':
+        info.external_attr=(0o100755 << 16)
+    with path.open('rb') as source, zf.open(info,'w') as target:
+        shutil.copyfileobj(source,target)
+
+
 def bundle(version):
     dist=ROOT/'dist';dist.mkdir(exist_ok=True)
     out=dist/f'ORBITclip_Client_v{version.replace(".","_")}.zip'
@@ -42,14 +58,14 @@ def bundle(version):
             rel=p.relative_to(ROOT)
             if rel.parts[0] in ('.git','.github','tools','docs','patches','dist'):continue
             if any(part in ('__pycache__','.venv') for part in rel.parts):continue
-            z.write(p,arcname=str(Path('ORBITclip')/rel))
+            add_zip_member(z,p,arcname=str(Path('ORBITclip')/rel))
     print(out.name,out.stat().st_size)
     patch=ROOT/'patches'/('v'+version)
     if patch.is_dir():
         dest=dist/f'ORBITclip_Patch_v{version.replace(".","_")}.zip'
         with ZipFile(dest,'w',compression=ZIP_DEFLATED,compresslevel=8) as z:
             for p in files_in(patch):
-                z.write(p,arcname=str(Path('ORBITclip_Patch_v'+version.replace('.','_'))/p.relative_to(patch)))
+                add_zip_member(z,p,arcname=str(Path('ORBITclip_Patch_v'+version.replace('.','_'))/p.relative_to(patch)))
         print(dest.name,dest.stat().st_size)
 
 if __name__=='__main__':
