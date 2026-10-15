@@ -86,7 +86,7 @@ class PostgreSQLCatalog:
         if self.conn is None:raise RuntimeError('Нет подключения к базе')
         with self.conn.cursor() as cursor:
             cursor.execute(query,args)
-            names=[getattr(c,'name',c[0]) for c in cursor.description]
+            names=[c.name if hasattr(c,'name') else c[0] for c in cursor.description]
             return [dict(zip(names,record)) for record in cursor.fetchall()]
 
     def tables(self):
