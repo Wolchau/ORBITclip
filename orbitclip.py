@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ORBITclip Qt 7.2.2 — floating clock, clipboard vault, encrypted peer-to-peer relay chat.
+"""ORBITclip Qt 7.4.0 — floating clock, clipboard vault, encrypted peer-to-peer relay chat.
 
 UI: PySide6 / Qt. Protocol + private JSON formats remain compatible with ORBITclip v6.
 Render does not store message bodies; both devices must be online.
@@ -49,6 +49,11 @@ from orbit_context import foreground_app
 from orbit_workspaces import Workspaces
 from orbit_workspace_ui import WorkspaceWindow
 from orbit_capture import RegionCapture, ScreenshotEditor
+from orbit_appearance import THEMES, palette, stylesheet, normalize_theme
+from orbit_notifications import NotificationStore
+from orbit_analytics import AnalyticsStore
+from orbit_activity_ui import NotificationCenterWindow, AnalyticsWindow
+from orbit_drum import DrumBubble
 
 APP_NAME = 'ORBITclip'
 QT_CLIENT_VERSION = CLIENT_VERSION
@@ -156,7 +161,15 @@ class OrbitPill(QWidget):
     def __init__(self, app):
         super().__init__(None)
         self.app=app
-        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # Native macOS window: Qt.Tool panels often disappear when the app loses focus.
+        # Qt.Window stays independent and non-modal, while the top-most hint keeps
+        # the clock visible above other applications.
+        if platform.system()=='Darwin':
+            self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+            self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+            self.setAttribute(Qt.WA_MacAlwaysShowToolWindow, True)
+        else:
+            self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setMouseTracking(True)
         self.compact_w=166;self.expanded_w=282;self.h=47
@@ -185,22 +198,22 @@ class OrbitPill(QWidget):
     def paintEvent(self, ev):
         p=QPainter(self);p.setRenderHint(QPainter.Antialiasing)
         rect=self.rect().adjusted(1,1,-2,-2)
-        p.setPen(QPen(QColor('#54606C'),1))
-        p.setBrush(QColor('#18232E'))
+        p.setPen(QPen(QColor(self.app.palette['border']),1))
+        p.setBrush(QColor(self.app.palette['surface']))
         p.drawRoundedRect(rect,16,16)
         today=datetime.now()
         dx=self.expanded_w-self.compact_w if self.is_expanded and self.expand_left else 0
         p.save();p.translate(dx,0)
-        p.setPen(QColor('#788998' if self.app.offline else '#F7AD94'));p.setBrush(QColor('#788998' if self.app.offline else '#F7AD94'))
+        p.setPen(QColor(self.app.palette['muted'] if self.app.offline else self.app.palette['accent']));p.setBrush(QColor(self.app.palette['muted'] if self.app.offline else self.app.palette['accent']))
         p.drawEllipse(13,19,7,7)
         f=QFont('Arial',18,QFont.DemiBold)
-        p.setFont(f);p.setPen(QColor('#F5F6F5'))
+        p.setFont(f);p.setPen(QColor(self.app.palette['text']))
         p.drawText(QRect(29,7,102,30),Qt.AlignVCenter|Qt.AlignLeft,today.strftime('%H:%M'))
         p.setFont(QFont('Arial',8,QFont.Medium));p.setPen(QColor('#93A9B7'))
         p.drawText(QRect(120,11,37,15), Qt.AlignRight|Qt.AlignVCenter,today.strftime('%d.%m'))
         p.setPen(Qt.NoPen);p.setBrush(QColor('#344450'))
         p.drawRoundedRect(QRect(30,39,120,2),1,1)
-        p.setBrush(QColor('#F7AA90'));p.drawRoundedRect(QRect(30,39,max(3,int(120*today.second/60)),2),1,1)
+        p.setBrush(QColor(self.app.palette['accent']));p.drawRoundedRect(QRect(30,39,max(3,int(120*today.second/60)),2),1,1)
         p.restore()
         if time.monotonic()<self._flash_until:
             p.setPen(QPen(QColor('#78E1C6'),2));p.setBrush(Qt.NoBrush)
@@ -245,6 +258,8 @@ class OrbitPill(QWidget):
             menu.addAction('Устройства онлайн…',self.app.open_online)
             menu.addAction('Общие пространства…',self.app.open_workspaces)
             menu.addAction('SQL Explorer · база и ER-схема…',self.app.open_sql_explorer)
+            menu.addAction('Уведомления…',self.app.open_notification_center)
+            menu.addAction('Моя аналитика…',self.app.open_analytics)
             menu.addAction('Быстрый OCR…',self.app.capture_ocr)
             menu.addAction('Снимок экрана и редактор…',self.app.capture_screen)
             menu.addAction('Настройки…',self.app.open_settings)
@@ -1719,7 +1734,7 @@ class PreferencesWindow(QWidget):
         self.setWindowTitle('ORBITclip · Настройки · v'+CLIENT_VERSION)
         self.setWindowIcon(QIcon(str(ASSETS/'orbit_icon.png')))
         self.setMinimumWidth(450)
-        self.resize(515,315)
+        self.resize(545,405)
         lay=QVBoxLayout(self);lay.setContentsMargins(22,20,22,18);lay.setSpacing(14)
         heading=QLabel('Настройки');heading.setObjectName('heading')
         lay.addWidget(heading)
@@ -1736,15 +1751,31 @@ class PreferencesWindow(QWidget):
         paste_info=label('Когда отпускаешь Ctrl после выбора через колесо: скопировать и вставить в активное приложение (Ctrl+V / Cmd+V).')
         paste_info.setWordWrap(True)
         lay.addWidget(paste_info)
+        lay.addWidget(label('Цветовая тема'))
+        self.themes=QComboBox()
+        for key,item in THEMES.items():self.themes.addItem(item['name'],key)
+        self.themes.setCurrentIndex(max(0,self.themes.findData(app.appearance_theme)))
+        lay.addWidget(self.themes)
+        self.themes.currentIndexChanged.connect(lambda *_:app.set_theme(self.themes.currentData()))
+        lay.addWidget(label('Превью при выборе Ctrl + колесом'))
+        self.wheel_view=QComboBox();self.wheel_view.addItem('Компактное окно','compact')
+        self.wheel_view.addItem('Минималистичный барабан','drum')
+        self.wheel_view.setCurrentIndex(1 if app.wheel_view=='drum' else 0)
+        lay.addWidget(self.wheel_view)
+        self.wheel_view.currentIndexChanged.connect(lambda *_:app.set_wheel_view(self.wheel_view.currentData()))
         self.hide_clock=None
-        if platform.system()=='Windows':
-            self.hide_clock=QCheckBox('Не показывать виджет часов (оставить иконку в трее)')
+        if platform.system() in ('Windows','Darwin'):
+            self.hide_clock=QCheckBox('Скрывать виджет часов (оставить системные значки)')
             self.hide_clock.setChecked(app.hide_clock_windows)
             lay.addWidget(self.hide_clock)
-            info=label('История, переписка и настройки останутся доступны через значок ORBITclip рядом с часами Windows.')
+            info=label('История, переписка и настройки остаются доступны из системного трея Windows или верхней панели macOS.')
             info.setWordWrap(True)
             lay.addWidget(info)
             self.hide_clock.toggled.connect(app.set_clock_hidden_windows)
+        shortcuts=QHBoxLayout()
+        shortcuts.addWidget(action('Уведомления…',app.open_notification_center))
+        shortcuts.addWidget(action('Моя аналитика…',app.open_analytics))
+        lay.addLayout(shortcuts)
         self.status=label('')
         lay.addWidget(self.status)
         row=QHBoxLayout();row.addStretch()
@@ -1762,11 +1793,15 @@ class OrbitApp:
         self.qt=QApplication.instance() or QApplication(sys.argv)
         self.qt.setApplicationName(APP_NAME)
         self.qt.setWindowIcon(QIcon(str(ASSETS/'orbit_icon.png')))
-        self.qt.setStyleSheet(STYLE)
         self.qt.setQuitOnLastWindowClosed(False)
         self.settings=read_settings()
-        self.hide_clock_windows=bool(self.settings.get('hide_clock_windows',False)) if platform.system()=='Windows' else False
-        self.tray_icon=None;self.tray_menu=None;self.tray_clock_action=None
+        self.appearance_theme=normalize_theme(self.settings.get('appearance_theme','midnight'))
+        self.palette=palette(self.appearance_theme)
+        self.qt.setStyleSheet(stylesheet(STYLE,self.appearance_theme))
+        self.notifications=NotificationStore()
+        self.analytics=AnalyticsStore(enabled=self.settings.get('analytics_enabled',True))
+        self.hide_clock_windows=bool(self.settings.get('hide_clock_windows',False)) if platform.system() in ('Windows','Darwin') else False
+        self.tray_icon=None;self.tray_menu=None;self.tray_clock_action=None;self.chat_status_icon=None
         self.offline=bool(self.settings.get('offline_mode',False))
         self.paste_on_release=bool(self.settings.get('paste_on_release',False))
         self.vault=ClipboardVault()
@@ -1807,8 +1842,10 @@ class OrbitApp:
         self.switch_category=0;self.switch_index=0;self.switch_active=False
         self._last_clip=''
         self.clipboard=self.qt.clipboard();self.clipboard.dataChanged.connect(self.on_clipboard)
-        self.toast=FloatingToast();self.bubble=ScrollBubble()
-        self.history=None;self.chat=None;self.online_window=None;self.preferences=None;self.workspace_window=None;self.sql_explorer=None;self.capture_window=None;self.screenshot_editor=None
+        self.toast=FloatingToast()
+        self.wheel_view=str(self.settings.get('wheel_view','compact'))
+        self.bubble=DrumBubble(self) if self.wheel_view=='drum' else ScrollBubble()
+        self.history=None;self.chat=None;self.online_window=None;self.preferences=None;self.workspace_window=None;self.sql_explorer=None;self.capture_window=None;self.screenshot_editor=None;self.notification_window=None;self.analytics_window=None
         self.tour_seen=bool(self.settings.get('tour_seen',False))
         raw_unread=self.settings.get('unread_peers',{})
         self.unread_peers={str(k):max(0,int(v)) for k,v in raw_unread.items() if isinstance(k,str) and isinstance(v,int) and not isinstance(v,bool)} if isinstance(raw_unread,dict) else {}
@@ -1816,6 +1853,8 @@ class OrbitApp:
         self.clock.setToolTip('ORBITclip v'+CLIENT_VERSION)
         if platform.system()=='Windows':
             self.create_windows_tray()
+        elif platform.system()=='Darwin':
+            self.create_macos_status_icons()
         if not self.hide_clock_windows or self.tray_icon is None:
             self.clock.show()
         if platform.system()=='Darwin' and not self.wheel.backend.startswith('macOS CoreGraphics'):
@@ -1848,6 +1887,89 @@ class OrbitApp:
             except ValueError as exc:
                 QMessageBox.warning(None,'Псевдоним обязателен',str(exc))
 
+    def set_wheel_view(self, mode):
+        mode='drum' if mode=='drum' else 'compact'
+        if self.wheel_view==mode:return
+        self.bubble.hide();self.bubble.deleteLater()
+        self.wheel_view=mode
+        self.bubble=DrumBubble(self) if mode=='drum' else ScrollBubble()
+        self.settings['wheel_view']=mode;self.save_settings()
+
+    def set_theme(self,theme):
+        value=normalize_theme(theme)
+        if self.appearance_theme==value:return
+        self.appearance_theme=value
+        self.palette=palette(value)
+        self.qt.setStyleSheet(stylesheet(STYLE,value))
+        self.settings['appearance_theme']=value
+        self.save_settings()
+        self.clock.update()
+        if self.analytics_window:self.analytics_window.chart.update()
+
+    def create_macos_status_icons(self):
+        """Two dedicated icons in the macOS menu bar: clipboard and messenger."""
+        if platform.system()!='Darwin' or not QSystemTrayIcon.isSystemTrayAvailable():
+            self.hide_clock_windows=False
+            return
+        history=QSystemTrayIcon(self.qt)
+        history.setIcon(icon('clipboard'))
+        history.setToolTip('ORBITclip · Буфер обмена')
+        hm=QMenu()
+        hm.addAction('Открыть историю',lambda checked=False:self.open_history())
+        hm.addAction('Пространства',lambda checked=False:self.open_workspaces())
+        hm.addAction('Уведомления',lambda checked=False:self.open_notification_center())
+        hm.addAction('Моя аналитика',lambda checked=False:self.open_analytics())
+        hm.addSeparator()
+        hm.addAction('Настройки…',lambda checked=False:self.open_settings())
+        self.tray_clock_action=hm.addAction('Скрыть виджет часов',lambda checked=False:self.set_clock_hidden_windows(not self.hide_clock_windows))
+        hm.addSeparator()
+        hm.addAction('Завершить ORBITclip',lambda checked=False:self.shutdown())
+        history.setContextMenu(hm)
+        history.activated.connect(lambda reason:self.open_history() if reason==QSystemTrayIcon.ActivationReason.DoubleClick else None)
+        history.show()
+        self.tray_icon=history;self.tray_menu=hm
+        messenger=QSystemTrayIcon(self.qt)
+        messenger.setIcon(icon('send'))
+        messenger.setToolTip('ORBITclip · Переписка')
+        cm=QMenu()
+        cm.addAction('Открыть мессенджер',lambda checked=False:self.open_chat())
+        cm.addAction('Непрочитанные уведомления',lambda checked=False:self.open_notification_center())
+        cm.addAction('Устройства онлайн',lambda checked=False:self.open_online())
+        messenger.setContextMenu(cm)
+        messenger.activated.connect(lambda reason:self.open_chat() if reason==QSystemTrayIcon.ActivationReason.DoubleClick else None)
+        messenger.show()
+        self.chat_status_icon=messenger
+        self.refresh_tray_menu()
+
+    def update_notification_badge(self):
+        n=self.notifications.unread()
+        if self.tray_icon:self.tray_icon.setToolTip(f'ORBITclip · {n} непрочитанных' if n else 'ORBITclip · Буфер обмена')
+        if self.chat_status_icon:self.chat_status_icon.setToolTip(f'ORBITclip · {n} уведомлений' if n else 'ORBITclip · Переписка')
+        # The inbox controls its own selection; avoid resetting it mid-click.
+
+    def notify(self,kind,title,description='',target='',dedupe='',show_popup=True):
+        item=self.notifications.push(kind,title,description,target,dedupe)
+        if item is None:return
+        self.update_notification_badge()
+        if self.notification_window and self.notification_window.isVisible():self.notification_window.refresh()
+        # QSystemTrayIcon requests native notifications; fallback only if absent.
+        if not show_popup:return
+        if (self.tray_icon is not None and QSystemTrayIcon.supportsMessages()):
+            self.tray_icon.showMessage(title,description or title,QSystemTrayIcon.Information,2600)
+        else:
+            self.toast.pop(title if not description else title+' · '+description)
+
+    def open_notification_center(self):
+        if self.notification_window is None:self.notification_window=NotificationCenterWindow(self)
+        self.notification_window.refresh()
+        self.notification_window.show();self.notification_window.raise_();self.notification_window.activateWindow()
+        self.analytics.record('notification_open')
+
+    def open_analytics(self):
+        if self.analytics_window is None:self.analytics_window=AnalyticsWindow(self)
+        self.analytics_window.refresh()
+        self.analytics_window.show();self.analytics_window.raise_();self.analytics_window.activateWindow()
+
     def open_settings(self):
         if self.preferences is None:self.preferences=PreferencesWindow(self)
         self.preferences.offline.blockSignals(True)
@@ -1878,6 +2000,8 @@ class OrbitApp:
         menu.addAction('Переписка',lambda checked=False:self.open_chat())
         menu.addAction('Устройства онлайн',lambda checked=False:self.open_online())
         menu.addAction('Общие пространства',lambda checked=False:self.open_workspaces())
+        menu.addAction('Уведомления',lambda checked=False:self.open_notification_center())
+        menu.addAction('Моя аналитика',lambda checked=False:self.open_analytics())
         menu.addAction('Быстрый OCR',lambda checked=False:self.capture_ocr())
         menu.addAction('Редактор снимка',lambda checked=False:self.capture_screen())
         menu.addSeparator()
@@ -1902,11 +2026,11 @@ class OrbitApp:
 
     def set_clock_hidden_windows(self,hidden):
         """Windows-only: hide the pill, not the app, clipboard capture or networking."""
-        if platform.system()!='Windows':return
+        if platform.system() not in ('Windows','Darwin'):return
         hidden=bool(hidden)
         if hidden and (self.tray_icon is None or not QSystemTrayIcon.isSystemTrayAvailable()):
             QMessageBox.warning(self.preferences or self.clock,'ORBITclip · Трей недоступен',
-                'Windows не сообщает о доступном системном трее. Виджет часов оставлен видимым, чтобы не потерять доступ к приложению.')
+                'Системная область значков недоступна. Виджет часов оставлен видимым, чтобы не потерять доступ к приложению.')
             hidden=False
         self.hide_clock_windows=hidden
         if hidden:
@@ -1954,7 +2078,7 @@ class OrbitApp:
         self.online_window.show();self.online_window.raise_();self.online_window.activateWindow()
 
     def save_settings(self):
-        self.settings.update(remote_url=self.url,https_url=self.url,remote_token=self.token,https_token=self.token,
+        self.settings.update(wheel_view=self.wheel_view,appearance_theme=self.appearance_theme,analytics_enabled=self.analytics.enabled,remote_url=self.url,https_url=self.url,remote_token=self.token,https_token=self.token,
                              remote_pair=self.remote_pair,https_pair=self.remote_pair,remote_device=self.device,
                              remote_tls_pin=self.tls_pin,https_tls_pin=self.tls_pin,
                              remote_cursor=self.cursor,remote_cursor_place=self.cursor_place,
@@ -1975,6 +2099,7 @@ class OrbitApp:
         except Exception:return
         if content and content != self._last_clip:
             self._last_clip=content;self.add_to_history(content);self.clock.flash()
+            self.analytics.record('clip_capture',foreground_app())
 
     def add_to_history(self,value,force=False):
         if not value or (self.paused and not force):return
@@ -1982,24 +2107,25 @@ class OrbitApp:
         if self.history and self.history.isVisible():self.history.refresh()
 
     def open_sql_explorer(self):
-        # The explorer is independent and never closes merely on focus loss.
+        # DB connection lives in its independent UI; no database password in settings.
         from orbit_sql_ui import SQLExplorer
-        if self.sql_explorer is None:
-            self.sql_explorer=SQLExplorer()
-        self.sql_explorer.show()
-        self.sql_explorer.raise_()
-        self.sql_explorer.activateWindow()
+        if self.sql_explorer is None:self.sql_explorer=SQLExplorer()
+        self.sql_explorer.show();self.sql_explorer.raise_();self.sql_explorer.activateWindow()
+        self.analytics.record('sql_open')
 
     def open_workspaces(self):
+        self.analytics.record('space_open')
         if self.workspace_window is None:self.workspace_window=WorkspaceWindow(self)
         self.workspace_window.refresh()
         self.workspace_window.show();self.workspace_window.raise_();self.workspace_window.activateWindow()
 
     def capture_screen(self):
+        self.analytics.record('screenshot')
         # An image editor is deliberately distinct from the one-action OCR flow.
         self.capture_window=RegionCapture(self.edit_capture)
 
     def capture_ocr(self):
+        self.analytics.record('ocr_run')
         self.capture_window=RegionCapture(self.recognize_capture)
 
     def recognize_capture(self,pixmap):
@@ -2052,12 +2178,14 @@ class OrbitApp:
             accepted=dialog.exec()==QMessageBox.Yes
             reply=self.workspaces.decide(wid,accepted)
             self.send_to_peer(peerid,reply)
-            self.toast.pop('Приглашение принято' if accepted else 'Приглашение отклонено')
+            self.notify('spaces','Приглашение в пространство',
+                        'Принято' if accepted else 'Отклонено',target=wid,dedupe='invite-'+wid)
         elif status=='joined':
             s=self.workspaces.spaces[wid]
             roster=self.workspaces.envelope(wid,'roster',members=s['members'])
             self.broadcast_workspace(wid,roster)
-            self.toast.pop('Новый участник пространства: '+self.identity.trusted[peerid]['name'])
+            self.notify('spaces','Новый участник пространства',
+                        self.identity.trusted[peerid]['name'],target=wid,dedupe='joined-'+wid+'-'+peerid)
         elif status=='update':
             s=self.workspaces.spaces[wid]
             if s['owner']==self.identity.id and body.get('event') in ('chat','clip'):
@@ -2065,16 +2193,30 @@ class OrbitApp:
                 relayed['workspace']=dict(body,relay=True)
                 self.broadcast_workspace(wid,relayed,exclude=peerid)
             if body.get('event') in ('chat','clip'):
-                self.toast.pop('Обновлено пространство «'+s['name']+'»')
+                event_kind=body.get('event')
+                if event_kind=='clip':
+                    self.analytics.record('space_clip_in')
+                    label='Новая запись в пространстве'
+                    # A clipboard publication may be a file reference; no data preview.
+                    entry=body.get('entry') or {}
+                    kind='files' if entry.get('kind')=='file' else 'spaces'
+                else:
+                    self.analytics.record('space_chat_in')
+                    label='Новое сообщение в пространстве'
+                    kind='spaces'
+                self.notify(kind,label,s['name'],target=wid,
+                            dedupe='space-'+wid+'-'+str((body.get('entry') or {}).get('id','')))
         if self.workspace_window and self.workspace_window.isVisible():self.workspace_window.refresh(wid)
         if self.history and self.history.isVisible() and self.history.space_mode=='shared':self.history.refresh()
 
     def open_history(self):
+        self.analytics.record('history_open')
         if self.history is None:self.history=VaultWindow(self)
         self.history.refresh()
         self.history.show();self.history.raise_();self.history.activateWindow()
 
     def open_chat(self):
+        self.analytics.record('chat_open')
         if self.chat is None:self.chat=ChatWindow(self)
         self.chat.show();self.chat.raise_();self.chat.activateWindow()
         if self.chat.pages.currentIndex()==0:self.chat.mark_conversation_read()
@@ -2083,7 +2225,7 @@ class OrbitApp:
         # Animated tutorials have been retired; no obsolete GIF assets are loaded.
         return
 
-    def note_incoming(self,peer_id):
+    def note_incoming(self,peer_id,kind='text'):
         if not peer_id:return
         visible=(self.chat is not None and self.chat.isVisible() and
                  self.chat.pages.currentIndex()==0 and self.selected_peer==peer_id and
@@ -2092,6 +2234,11 @@ class OrbitApp:
             self.unread_peers[peer_id]=min(999,int(self.unread_peers.get(peer_id,0))+1)
             self.save_settings()
         if self.chat:self.chat.refresh_dialog_list()
+        self.analytics.record('chat_in')
+        title='Получен файл' if kind=='file' else 'Новое сообщение'
+        peer=self.identity.trusted.get(peer_id,{}).get('name','Другое устройство')
+        self.notify('files' if kind=='file' else 'messages',title,peer,
+                    target=peer_id,dedupe='peer-'+str(peer_id)+'-'+str(time.monotonic_ns()//5000000000),show_popup=not visible)
 
     def clear_unread(self,peer_id):
         if peer_id and self.unread_peers.get(peer_id,0):
@@ -2190,6 +2337,7 @@ class OrbitApp:
 
     def send_to_peer(self,peer,payload):
         if self.offline:return False
+        if payload.get('origin')!='workspace':self.analytics.record('file_out' if payload.get('kind')=='file' else 'chat_out')
         if peer=='legacy' and self.remote_config:
             self.bridge.send(payload);return True
         bridge=self.peer_bridges.get(peer)
@@ -2197,6 +2345,7 @@ class OrbitApp:
         bridge.send(payload);return True
 
     def send_to_active(self,payload):
+        if not self.offline:self.analytics.record('file_out' if payload.get('kind')=='file' else 'chat_out')
         if self.offline:
             self.toast.pop('Оффлайн: отправка отключена')
             return False
@@ -2290,6 +2439,7 @@ class OrbitApp:
                     if self.store.put(place,record,direction):
                         if ident==self.selected_peer:refresh=True
                         if direction=='in':
+                            data={}
                             try:
                                 data=decrypt_message(record['payload'],key)
                                 if data.get('kind')=='file':
@@ -2297,8 +2447,7 @@ class OrbitApp:
                                     description=('Файл сохранён: ' if saved else 'Ошибка сохранения файла: ')+data.get('name','')
                                 else:description=data.get('text','')
                             except Exception:description='Зашифрованное сообщение'
-                            self.note_incoming(ident)
-                            self.toast.pop(self.identity.trusted[ident]['name']+': '+truncate(description,90))
+                            self.note_incoming(ident, 'file' if data.get('kind')=='file' else 'text')
                 elif event=='cursor':
                     v=int(ev[1])
                     if v>int(self.peer_cursors.get(ident,0)):
@@ -2393,6 +2542,7 @@ class OrbitApp:
                 if self.store.put(self.cursor_place,record,direction):
                     refresh=True
                     if direction=='in':
+                        data={}
                         try:
                             data=decrypt_message(record['payload'],self.remote_pair)
                             if data.get('kind')=='file':
@@ -2400,8 +2550,7 @@ class OrbitApp:
                                 excerpt=('Файл сохранён: ' if saved else 'Ошибка сохранения файла: ')+data.get('name','')
                             else:excerpt=data.get('text','')
                         except Exception:excerpt='Получено зашифрованное сообщение'
-                        self.note_incoming('legacy')
-                        self.toast.pop('Входящее · '+truncate(excerpt,90))
+                        self.note_incoming('legacy','file' if data.get('kind')=='file' else 'text')
             elif event=='cursor':
                 if ev[1]>self.cursor:
                     self.cursor=ev[1];self.save_settings()
@@ -2438,6 +2587,7 @@ class OrbitApp:
                 self.switch_active=False;self.bubble.hide()
                 if item and not item.get('encrypted'):
                     self.copy_text(item.get('text',''))
+                    self.analytics.record('wheel_commit')
                     if self.paste_on_release:
                         QTimer.singleShot(110,lambda:self.try_paste(0))
             elif what in ('cancel','pointer_down'):
@@ -2460,7 +2610,11 @@ class OrbitApp:
             else:self.bubble.hide()
             return
         self.switch_index %= len(choices)
-        self.bubble.show_item(choices[self.switch_index],self.switch_categories[self.switch_category%len(self.switch_categories)][1],self.switch_index,len(choices))
+        cat_name=self.switch_categories[self.switch_category%len(self.switch_categories)][1]
+        if isinstance(self.bubble,DrumBubble):
+            self.bubble.show_neighbors(choices,self.switch_index,cat_name)
+        else:
+            self.bubble.show_item(choices[self.switch_index],cat_name,self.switch_index,len(choices))
 
     def try_paste(self,attempt=0):
         if self.hotkeys.modifiers_held():
@@ -2477,6 +2631,7 @@ class OrbitApp:
             target=Path(folder) if folder else Path.home()/'Downloads'
             saved=save_attachment(payload,target/'ORBITclip',MAX_FILE_SIZE)
             self.store.set_saved_path(place,record['id'],str(saved))
+            self.analytics.record('file_in')
             return saved
         except (OSError,ValueError,TypeError) as exc:
             # Keep encrypted packet in local history; allow retry without another transfer.
@@ -2490,7 +2645,8 @@ class OrbitApp:
         for bridge in self.peer_bridges.values():bridge.stop()
         self.wheel.stop();self.hotkeys.stop()
         if self.tray_icon is not None:self.tray_icon.hide()
-        self.save_settings();self.store.close();self.qt.quit()
+        if self.chat_status_icon is not None:self.chat_status_icon.hide()
+        self.save_settings();self.store.close();self.notifications.close();self.analytics.close();self.qt.quit()
 
     def run(self):return self.qt.exec()
 

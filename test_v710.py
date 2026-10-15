@@ -50,8 +50,8 @@ class MessengerTests(unittest.TestCase):
     def test_unread_model_is_wired(self):
         for name in ('note_incoming','clear_unread','open_tour','send_to_peer'):
             method('OrbitApp',name)
-        self.assertIn('self.note_incoming(ident)',source)
-        self.assertIn("self.note_incoming('legacy')",source)
+        self.assertIn('self.note_incoming(ident,',source)
+        self.assertIn("self.note_incoming('legacy',",source)
 
 class RetiredTourTests(unittest.TestCase):
     def test_animations_intentionally_removed_in_721(self):
@@ -60,7 +60,7 @@ class RetiredTourTests(unittest.TestCase):
         self.assertNotIn('QMovie',source)
 
     def test_client_version_updated_without_protocol_change(self):
-        self.assertEqual(CLIENT_VERSION,'7.3.0')
+        self.assertEqual(CLIENT_VERSION,'7.4.0')
         self.assertIn('QT_CLIENT_VERSION = CLIENT_VERSION',source)
         self.assertNotIn('Возможности ✦',source)
 

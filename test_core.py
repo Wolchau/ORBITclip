@@ -31,7 +31,7 @@ def test_models():
         messages=MessageStore(base/'messages.json')
         messages.put('place',{'id':1,'ts':123,'device':'x','payload':packet},'out')
         assert len(MessageStore(base/'messages.json').fetch('place'))==1
-        assert CLIENT_VERSION=='7.2.0'
+        assert CLIENT_VERSION=='7.4.0'
         print('PASS: vault, migration, encryption, favorites, scroll, invites, message store')
 
 if __name__=='__main__':test_models()
