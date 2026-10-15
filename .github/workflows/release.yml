@@ -1,0 +1,43 @@
+name: Publish ORBITclip Release
+on:
+  push:
+    branches: [main]
+    paths:
+      - orbit_version.py
+      - .github/workflows/release.yml
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify source and regression tests
+        run: |
+          python -m compileall -q .
+          python -m unittest discover -p 'test_*.py' -q
+      - name: Build client and installer patch
+        run: python tools/release_builder.py
+      - name: Publish only if version not released
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION=$(python -c 'import ast; from pathlib import Path; s=ast.parse(Path("orbit_version.py").read_text()); print(next(ast.literal_eval(n.value) for n in s.body if isinstance(n, ast.Assign) and any(getattr(t,"id",None)=="CLIENT_VERSION" for t in n.targets)))')
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; not overwriting."
+            exit 0
+          fi
+          NOTES="docs/releases/${TAG}.md"
+          if [ -f "$NOTES" ]; then
+            gh release create "$TAG" dist/*.zip --target "$GITHUB_SHA" --title "ORBITclip $TAG" --notes-file "$NOTES"
+          else
+            gh release create "$TAG" dist/*.zip --target "$GITHUB_SHA" --title "ORBITclip $TAG" --generate-notes
+          fi
