@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ORBITclip Qt 7.4.0 — floating clock, clipboard vault, encrypted peer-to-peer relay chat.
+"""ORBITclip Qt 7.4.1 — floating clock, clipboard vault, encrypted peer-to-peer relay chat.
 
 UI: PySide6 / Qt. Protocol + private JSON formats remain compatible with ORBITclip v6.
 Render does not store message bodies; both devices must be online.
@@ -1759,7 +1759,7 @@ class PreferencesWindow(QWidget):
         self.themes.currentIndexChanged.connect(lambda *_:app.set_theme(self.themes.currentData()))
         lay.addWidget(label('Превью при выборе Ctrl + колесом'))
         self.wheel_view=QComboBox();self.wheel_view.addItem('Компактное окно','compact')
-        self.wheel_view.addItem('Минималистичный барабан','drum')
+        self.wheel_view.addItem('Объёмный барабан · плавное вращение','drum')
         self.wheel_view.setCurrentIndex(1 if app.wheel_view=='drum' else 0)
         lay.addWidget(self.wheel_view)
         self.wheel_view.currentIndexChanged.connect(lambda *_:app.set_wheel_view(self.wheel_view.currentData()))
@@ -2575,7 +2575,7 @@ class OrbitApp:
             if what=='move':
                 if not self.switch_active:self.switch_active=True;self.switch_category=0;self.switch_index=0
                 self.switch_index+=value
-                self.draw_bubble()
+                self.draw_bubble(value)
             elif what=='category' and self.switch_active and self.switch_categories:
                 # Wrap over the end and skip empty categories without hiding the popup.
                 self.switch_category=next_nonempty_category(
@@ -2602,7 +2602,7 @@ class OrbitApp:
         choices=self.candidates()
         return choices[self.switch_index%len(choices)] if choices else None
 
-    def draw_bubble(self):
+    def draw_bubble(self, wheel_step=0):
         choices=self.candidates()
         if not choices:
             if self.switch_categories:
@@ -2612,7 +2612,7 @@ class OrbitApp:
         self.switch_index %= len(choices)
         cat_name=self.switch_categories[self.switch_category%len(self.switch_categories)][1]
         if isinstance(self.bubble,DrumBubble):
-            self.bubble.show_neighbors(choices,self.switch_index,cat_name)
+            self.bubble.show_neighbors(choices,self.switch_index,cat_name,step_hint=wheel_step)
         else:
             self.bubble.show_item(choices[self.switch_index],cat_name,self.switch_index,len(choices))
 
