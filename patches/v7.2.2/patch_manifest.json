@@ -1,0 +1,97 @@
+{
+  "app": "ORBITclip",
+  "from_version": "7.2.1",
+  "to_version": "7.2.2",
+  "files": [
+    {
+      "path": "orbitclip.py",
+      "sha256": "524ef7b02575f172c15b308c0d9b09c59b984c73ebbef68aeaf43ccf14475a98",
+      "base_sha256": "1647cf4ca4ee1fbedc8b75767608318dc6b5a11cc5fe7b06cd5a24d376fd2f7b"
+    },
+    {
+      "path": "orbit_version.py",
+      "sha256": "c78ebb7b5416edff8986d6630be942c4ca62f3b815b277fe61982de9631e647b",
+      "base_sha256": "028efe34b0db70db7ab9629b670b75b3b15f7e20e5d93169c18cf4ef01bcbce5"
+    },
+    {
+      "path": "orbit_workspace_ui.py",
+      "sha256": "b49cc7bdb08ed77dddfb366db0ce21ed32746bd07eafed39975c2b1c3ac25092",
+      "base_sha256": "f4b5ec1aae66c8267a73561907508b115c28d3eb9ad05856ffee5a79f14d92bd"
+    },
+    {
+      "path": "orbit_smart.py",
+      "sha256": "1321d3fd17d5f2bd089bebb5e0737848f6ebf67bcc6e773b855a2123e4d998fe",
+      "base_sha256": "22beb78aedb817702dcb1ceb69e394d90f2fb582fe85009f0bad6b2bdc77498b"
+    },
+    {
+      "path": "assets/icons/python.svg",
+      "sha256": "c60b0f50a137a80672cb3c2df49db8f46e6732e72f72a0de079aa499993ad70d",
+      "base_sha256": "276a8c747786d001ba94caf33eda1b0e4e777caeac36b4a160f2fdecf387cd0c"
+    },
+    {
+      "path": "assets/icons/sql.svg",
+      "sha256": "533dcfc567a2206b39239c1e33851a62f18b3c0aeb46c6cd4645dc32a2546477",
+      "base_sha256": "23fccd2f22860de5336fbc4c96439ba6113da47cb2c2973d19a3aac2e9bbe986"
+    },
+    {
+      "path": "assets/icons/code.svg",
+      "sha256": "ddf59acdd573c331550e3d2ed2d57a69dea32634082c1365f59c86ae82130f25",
+      "base_sha256": "8d093afe26b3823e13fc41046ceabbaa261f4ce648d4afd4093c655582be12d1"
+    },
+    {
+      "path": "assets/icons/html.svg",
+      "sha256": "9333c8df2a5fdbd90d4deb0e1ac4f23160b581ad63c62ee0a0d2ebbfc6e88a0c",
+      "base_sha256": "3c05a69ed86419285e6ad93949d85c3b2fa837ab036c30ecf49f9cff76d4f5dc"
+    },
+    {
+      "path": "assets/icons/json.svg",
+      "sha256": "5cb9add6ccac5af69c7c45cf4e25f580d16ede87a2db3166b6e7d67a4bc71b34",
+      "base_sha256": "ea4e98c910f71963749b34fc9c335e226efec1391c3a61289a57989d1fa789c5"
+    },
+    {
+      "path": "assets/icons/link.svg",
+      "sha256": "d6f6ee0a1f9d255397c1bd70e4b432faef5eb87146e1ed2f2992cfaca3c185f3",
+      "base_sha256": "69be0b1b181c2fd07b8e591a83738d6210693b934395ab546a5f256d3a9e8373"
+    },
+    {
+      "path": "assets/icons/table.svg",
+      "sha256": "1a5697cc5e41a90e4cbb5168dcb5be55ac42e467dc9393d10edc0158954998f0",
+      "base_sha256": "556124b658fab7cc8e3d220d32809d04adb087ac7a5d6a6b7e4f6e18ba75774a"
+    },
+    {
+      "path": "assets/icons/clipboard.svg",
+      "sha256": "fc0bde61bae66d2dee6403fb3a4faf16cd3a715c5b1b751fee5c514f78a812e1",
+      "base_sha256": "bf9ce7c50ecc8a0c355545526435af17802176e4af10104af3688a62cd895b21"
+    },
+    {
+      "path": "assets/icons/text.svg",
+      "sha256": "3a4e6b5cf582623eaa8b310ae0723609a0ccda0f319bff4f940847d2f983166c",
+      "base_sha256": "b6a0e72e6065450c83d41f04345f3a48be1c60bd62530a6a0a807b45849e0f8a"
+    },
+    {
+      "path": "assets/icons/favorite.svg",
+      "sha256": "42d42d8cd1755d3205474d34371b361e37f9ec88e428bededa42c606773345ad",
+      "base_sha256": "6c8999129d91f9605aa4f147206a62b48f37f026f82e6bcc771da5926e2baa4d"
+    },
+    {
+      "path": "test_v710.py",
+      "sha256": "89f3442d75a6f0d464aacd6be1261e6c4704a9536aea1e699937e5192ddb849e",
+      "base_sha256": "4badfc91fdf54565fc9881b3f810f66bdda301c060c17625ebc543e3f957ea99"
+    },
+    {
+      "path": "test_v721.py",
+      "sha256": "b2a0b16c98a4973900a0df219faff27d49f70a380ba9c414f5c0ea6a0ab21b4e",
+      "base_sha256": "1719f36fb953300e2ffe6bccf236e9a5f4bdc7fa9f8e9935290631e56d3507d0"
+    },
+    {
+      "path": "test_v722.py",
+      "sha256": "a103fbdda3bb1ebb9be050e682a856d64b7badd319f09b7c2cec39de5a077059",
+      "base_sha256": null
+    },
+    {
+      "path": "README_RU.md",
+      "sha256": "7b3bef25eed607a366099ed988b34154f54183a136b79cc95a4434a375677e8d",
+      "base_sha256": "5d2e572567cc89a08b1767f4f702d8b5e0ed68e55e8a7412f336b6bdeddc8b05"
+    }
+  ]
+}
