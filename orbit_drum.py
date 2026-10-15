@@ -1,75 +1,276 @@
-"""Optional minimal three-face clipboard carousel; Qt only, no data persistence."""
+"""Frameless, smoothly rotating cylindrical clipboard switcher for Qt.
+
+No focus is taken from the user's active application. Transparency is genuine:
+there is no full-window card or border, only the floating cylinder facets.
+"""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRectF, QPointF
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF
+import math
+
+from PySide6.QtCore import Qt, QRectF, QVariantAnimation, QEasingCurve
+from PySide6.QtGui import (
+    QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen,
+    QPolygonF, QRadialGradient, QBrush,
+)
+from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication, QWidget
+
+from orbit_drum_geometry import next_target, visible_faces
 
 
 class DrumBubble(QWidget):
-    """Renders previous/current/next clipboard entries as three drum facets."""
+    """Three-dimensional clipboard wheel: QPainter perspective + eased rotation."""
+
     def __init__(self, app):
         super().__init__(None)
-        self.app=app
-        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint |
-                            Qt.WindowDoesNotAcceptFocus)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAttribute(Qt.WA_ShowWithoutActivating,True)
-        self.setAttribute(Qt.WA_MacAlwaysShowToolWindow,True)
-        self.resize(372,220)
-        self.items=['','',''];self.heading='Буфер обмена';self.position=''
+        self.app = app
+        self.setWindowFlags(
+            Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint |
+            Qt.WindowDoesNotAcceptFocus | Qt.NoDropShadowWindowHint |
+            Qt.WindowTransparentForInput
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_MacAlwaysShowToolWindow, True)
+        self.setAutoFillBackground(False)
+        self.setFixedSize(390, 302)
+        self.heading = 'Буфер обмена'
+        self.position = ''
+        self.items = ['', '', '']
+        self._entries = []
+        self._keys = ()
+        self._cursor = 0.0
+        self._target = 0
+        self._static_mode = False
+        self._animation = QVariantAnimation(self)
+        self._animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._animation.valueChanged.connect(self._set_cursor)
+        self._animation.finished.connect(self._finish_animation)
 
-    def show_neighbors(self, choices, index, category):
-        if not choices:return self.show_empty(category)
-        n=len(choices);self.position=f'{index+1} / {n}';self.heading=category
-        self.items=[self._preview(choices[(index-1)%n]),
-                    self._preview(choices[index]),self._preview(choices[(index+1)%n])]
+    @staticmethod
+    def _preview(item):
+        if item.get('encrypted'):
+            return '••• Защищённая запись'
+        value = str(item.get('text') or item.get('title') or '')
+        return ' '.join(value.split())[:220] or 'Пустая запись'
+
+    @staticmethod
+    def _id(item):
+        # The clip ID stays stable while metadata/text may be updated in place.
+        return str(item.get('id', item.get('text', item.get('title', ''))))
+
+    def show_neighbors(self, choices, index, category, step_hint=0):
+        if not choices:
+            return self.show_empty(category)
+        count = len(choices)
+        index %= count
+        old_keys = self._keys
+        keys = tuple(self._id(item) for item in choices)
+        old_heading = self.heading
+        visible_before = self.isVisible()
+        self.heading = str(category)
+        self.position = f'{index + 1} / {count}'
+        self.items = [self._preview(choices[(index - 1) % count]),
+                      self._preview(choices[index]),
+                      self._preview(choices[(index + 1) % count])]
+        self._entries = list(choices)
+        self._keys = keys
+        self._static_mode = False
+
+        # A new category, list, or popup gets a fresh position, no flying jump.
+        if not visible_before or keys != old_keys or old_heading != self.heading or count == 1:
+            self._animation.stop()
+            self._target = index
+            self._cursor = float(index)
+        else:
+            target = next_target(self._target, index, count, step_hint)
+            if target != self._target:
+                starting = self._cursor
+                self._animation.stop()
+                self._target = target
+                self._animation.setStartValue(starting)
+                self._animation.setEndValue(float(target))
+                # Fast wheel ticks accelerate instead of spawning queued animations.
+                distance = abs(target - starting)
+                self._animation.setDuration(max(95, min(285, int(145 + 38 * distance))))
+                self._animation.start()
         self._display()
 
-    def _preview(self, item):
-        if item.get('encrypted'):return '••• Защищённая запись'
-        return ' '.join(str(item.get('text') or item.get('title') or '').split())[:190]
-
     def show_item(self, item, cat_label, index, total):
-        self.heading=cat_label;self.position=f'{index+1} / {total}'
-        self.items=['',self._preview(item),''];self._display()
+        """Compatibility with the compact switcher's direct-single-item API."""
+        self._animation.stop()
+        self.heading = str(cat_label)
+        self.position = f'{index + 1} / {total}'
+        self.items = ['', self._preview(item), '']
+        self._entries = [item]
+        self._keys = (self._id(item),)
+        self._static_mode = True
+        self._cursor = 0.0
+        self._target = 0
+        self._display()
 
     def show_empty(self, category):
-        self.heading=category;self.position='0 / 0'
-        self.items=['','Нет записей',''];self._display()
+        self._animation.stop()
+        self.heading = str(category)
+        self.position = '0 / 0'
+        self.items = ['', 'Нет записей', '']
+        self._entries = [{'text': 'Нет записей'}]
+        self._keys = ()
+        self._static_mode = True
+        self._cursor = 0.0
+        self._target = 0
+        self._display()
+
+    def _set_cursor(self, value):
+        self._cursor = float(value)
+        self.update()
+
+    def _finish_animation(self):
+        self._cursor = float(self._target)
+        self.update()
+
+    def hideEvent(self, event):
+        self._animation.stop()
+        super().hideEvent(event)
 
     def _display(self):
-        screen=QApplication.screenAt(self.app.clock.frameGeometry().center()) or QApplication.primaryScreen()
-        area=screen.availableGeometry()
-        cx=max(area.left()+self.width()//2+10,min(area.right()-self.width()//2-10,
-                  self.app.clock.frameGeometry().center().x()))
-        y=max(area.top()+16,min(area.bottom()-self.height()-16,
-              self.app.clock.y()+self.app.clock.height()+10))
-        self.move(cx-self.width()//2,y)
-        self.update();self.show();self.raise_()
+        clock = self.app.clock
+        screen = QApplication.screenAt(clock.frameGeometry().center()) or QApplication.primaryScreen()
+        if screen is not None:
+            area = screen.availableGeometry()
+            x = max(area.left() + 10, min(area.right() - self.width() - 10,
+                    clock.frameGeometry().center().x() - self.width() // 2))
+            desired = clock.y() + clock.height() + 9
+            if desired + self.height() + 12 > area.bottom():
+                desired = clock.y() - self.height() - 9
+            y = max(area.top() + 10, min(area.bottom() - self.height() - 10, desired))
+            self.move(x, y)
+        self.update()
+        if not self.isVisible():
+            self.show()
+        self.raise_()
 
-    def paintEvent(self,event):
-        p=QPainter(self);p.setRenderHint(QPainter.Antialiasing)
-        pal=self.app.palette
-        p.setPen(QPen(QColor(pal['border']),1));p.setBrush(QColor(pal['surface']))
-        p.drawRoundedRect(self.rect().adjusted(2,2,-3,-3),17,17)
-        p.setPen(QColor(pal['muted']));p.setFont(QFont('Arial',9,QFont.DemiBold))
-        p.drawText(QRectF(19,10,330,21),Qt.AlignVCenter|Qt.AlignLeft,self.heading)
-        p.drawText(QRectF(19,10,330,21),Qt.AlignVCenter|Qt.AlignRight,self.position)
-        # Three shallow facets: fore-shortened trapezoids give depth without noise.
-        for idx,(y,h,inset) in enumerate(((38,47,15),(87,74,0),(164,43,15))):
-            current=idx==1
-            face=QPolygonF([QPointF(18+inset,y+7),QPointF(354-inset,y+7),
-                            QPointF(354-inset+(9 if idx==0 else -9 if idx==2 else 0),y+h-5),
-                            QPointF(18+inset-(9 if idx==0 else -9 if idx==2 else 0),y+h-5)])
-            color=QColor(pal['raised'] if current else pal['bg'])
-            color.setAlpha(255 if current else 177)
-            p.setPen(QPen(QColor(pal['accent'] if current else pal['border']),
-                          1.5 if current else 0.7))
-            p.setBrush(color);p.drawPolygon(face)
-            p.setPen(QColor(pal['text'] if current else pal['muted']))
-            p.setFont(QFont('Arial',11 if current else 9,QFont.DemiBold if current else QFont.Normal))
-            text=self.items[idx]
-            max_char=45 if current else 56
-            if len(text)>max_char:text=text[:max_char-1]+'…'
-            p.drawText(QRectF(33+inset,y+10,306-2*inset,h-19),Qt.AlignVCenter|Qt.AlignLeft,text)
+    def _draw_face(self, painter, face, preview, pal):
+        intensity = face['opacity']
+        y0, y1 = face['top_y'], face['bottom_y']
+        if intensity <= .015 or y1 - y0 < 7:
+            return
+        cx = (face['top_left'] + face['top_right']) / 2
+        polygon = QPolygonF([
+            QPointF(face['top_left'], y0), QPointF(face['top_right'], y0),
+            QPointF(face['bottom_right'], y1), QPointF(face['bottom_left'], y1),
+        ])
+        shape = QPainterPath()
+        shape.addPolygon(polygon)
+        shape.closeSubpath()
+
+        # A restrained ambient shadow gives the active face a little separation.
+        if abs(face['relative']) < .65:
+            painter.save()
+            painter.translate(0, 3)
+            shadow = QColor(0, 0, 0, int(37 * intensity))
+            painter.fillPath(shape, shadow)
+            painter.restore()
+
+        top = QColor(pal['raised'])
+        bottom = QColor(pal['surface'])
+        # Front is gently lifted; rear strips darken as they curve away.
+        top.setAlpha(int((215 if intensity > .72 else 188) * intensity))
+        bottom.setAlpha(int((224 if intensity > .72 else 168) * intensity))
+        grad = QLinearGradient(cx, y0, cx, y1)
+        grad.setColorAt(0, top)
+        grad.setColorAt(.43, QColor(top))
+        grad.setColorAt(1, bottom)
+        painter.fillPath(shape, QBrush(grad))
+
+        # Avoid enclosing the drum in an outer window border: only facet edges.
+        edge = QColor(pal['border'])
+        edge.setAlpha(int(80 * intensity))
+        painter.setPen(QPen(edge, .7))
+        painter.drawLine(QPointF(face['top_left'], y0), QPointF(face['top_right'], y0))
+        painter.drawLine(QPointF(face['bottom_left'], y1), QPointF(face['bottom_right'], y1))
+
+        is_front = abs(face['relative']) < .52
+        if is_front:
+            accent = QColor(pal['accent'])
+            accent.setAlpha(int(180 * intensity))
+            painter.setPen(QPen(accent, 2.2, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(QPointF(face['top_left'] + 8, y0 + 13),
+                             QPointF(face['bottom_left'] + 8, y1 - 13))
+
+        painter.save()
+        painter.setClipPath(shape)
+        font = QFont(painter.font())
+        font.setPixelSize(13 if is_front else max(10, int(12 * max(.78, face['facing']))))
+        font.setWeight(QFont.DemiBold if is_front else QFont.Normal)
+        painter.setFont(font)
+        fg = QColor(pal['text'] if is_front else pal['muted'])
+        fg.setAlpha(int((247 if is_front else 195) * intensity))
+        painter.setPen(fg)
+        horizontal = min(face['top_left'], face['bottom_left']) + 23
+        width = max(face['top_right'], face['bottom_right']) - horizontal - 20
+        metrics = QFontMetrics(font)
+        if is_front and y1 - y0 >= 49:
+            # Split into two deliberate, elided lines rather than overflow facets.
+            text = preview
+            line_one = metrics.elidedText(text, Qt.ElideRight, int(width * 1.77))
+            cut = min(len(text), max(1, len(line_one.rstrip('…'))))
+            if cut >= len(text):
+                first = metrics.elidedText(text, Qt.ElideRight, int(width))
+                second = ''
+            else:
+                preferred = text.rfind(' ', 8, cut + 1)
+                if preferred >= int(cut * .55):
+                    cut = preferred
+                first = metrics.elidedText(text[:cut].strip(), Qt.ElideRight, int(width))
+                second = metrics.elidedText(text[cut:].strip(), Qt.ElideRight, int(width))
+            line_h = metrics.height()
+            total_h = line_h * (2 if second else 1)
+            top_y = (y0 + y1 - total_h) / 2
+            painter.drawText(QRectF(horizontal, top_y, width, line_h + 2),
+                             Qt.AlignVCenter | Qt.AlignLeft, first)
+            if second:
+                painter.drawText(QRectF(horizontal, top_y + line_h, width, line_h + 2),
+                                 Qt.AlignVCenter | Qt.AlignLeft, second)
+        else:
+            label = metrics.elidedText(preview, Qt.ElideRight, int(width))
+            painter.drawText(QRectF(horizontal, y0 + 2, width, max(1, y1-y0-4)),
+                             Qt.AlignVCenter | Qt.AlignLeft, label)
+        painter.restore()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        pal = self.app.palette
+        # Never paint a full-window rounded rectangle: transparent everywhere
+        # outside the projected drum strips and floating typography.
+        painter.setFont(QFont(painter.font().family(), 10, QFont.DemiBold))
+        text_color = QColor(pal['muted'])
+        text_color.setAlpha(219)
+        painter.setPen(text_color)
+        painter.drawText(QRectF(25, 9, 260, 27),
+                         Qt.AlignVCenter | Qt.AlignLeft, self.heading)
+        painter.drawText(QRectF(292, 9, 73, 27),
+                         Qt.AlignVCenter | Qt.AlignRight, self.position)
+        if not self._entries:
+            return
+
+        # Soft diffuse underlay: not a rectangular popup background.
+        halo = QRadialGradient(QPointF(195, 158), 172, QPointF(195, 158))
+        glow = QColor(pal['bg'])
+        glow.setAlpha(115)
+        halo.setColorAt(0, glow)
+        glow.setAlpha(0)
+        halo.setColorAt(1, glow)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(halo))
+        painter.drawEllipse(QRectF(5, 38, 380, 245))
+
+        count = len(self._entries)
+        if self._static_mode:
+            faces = [face for face in visible_faces(0.0, count=1)
+                     if face['relative'] == 0]
+        else:
+            faces = visible_faces(self._cursor, count=count)
+        for face in faces:
+            self._draw_face(painter, face, self._preview(self._entries[face['index']]), pal)
