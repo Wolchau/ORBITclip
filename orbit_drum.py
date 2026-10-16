@@ -368,8 +368,9 @@ class DrumBubble(QWidget):
         painter.save()
         painter.setClipPath(shape)
         font = QFont(painter.font())
-        font.setPixelSize(13 if is_front else max(10, int(12 * max(.78, face['facing']))))
-        font.setStretch(round(100*390/self.width()))
+        target_size = 13 if is_front else max(10, int(12 * max(.78, face['facing'])))
+        font.setPixelSize(round(target_size*302/self.height()))
+        font.setStretch(round(100*390*self.height()/(302*self.width())))
         font.setWeight(QFont.DemiBold if is_front else QFont.Normal)
         painter.setFont(font)
         fg = QColor('#11202A' if material=='metal' and is_front else
@@ -414,8 +415,8 @@ class DrumBubble(QWidget):
             return
         y = 270 if self.options['header_position'] == 'bottom' else 7
         font = QFont(painter.font())
-        font.setPixelSize(13 if mode == 'full' else 12)
-        font.setStretch(round(100*390/self.width()))
+        font.setPixelSize(round((13 if mode == 'full' else 12)*302/self.height()))
+        font.setStretch(round(100*390*self.height()/(302*self.width())))
         font.setWeight(QFont.DemiBold)
         painter.setFont(font)
         index = str(position) if self.options['show_index'] and mode != 'minimal' else ''
@@ -434,7 +435,7 @@ class DrumBubble(QWidget):
         label = QFontMetrics(font).elidedText(str(heading), Qt.ElideRight, title_width)
         painter.drawText(QRectF(x, y, title_width, 27), Qt.AlignVCenter | Qt.AlignLeft, label)
         if index:
-            font.setPixelSize(11); font.setWeight(QFont.Normal)
+            font.setPixelSize(round(11*302/self.height())); font.setWeight(QFont.Normal)
             painter.setFont(font)
             painter.setPen(QColor(pal['muted']))
             painter.drawText(QRectF(300, y, 67, 27),
@@ -481,8 +482,9 @@ class DrumBubble(QWidget):
                 marker=QColor(pal['accent'])
                 painter.setBrush(marker);painter.setPen(Qt.NoPen)
                 painter.drawRoundedRect(QRectF(x+9,y+11,3,h-22),1.5,1.5)
-            font=QFont(painter.font());font.setPixelSize(14 if focus else 11)
-            font.setStretch(round(100*390/self.width()))
+            font=QFont(painter.font())
+            font.setPixelSize(round((14 if focus else 11)*302/self.height()))
+            font.setStretch(round(100*390*self.height()/(302*self.width())))
             font.setWeight(QFont.DemiBold if focus else QFont.Normal)
             painter.setFont(font)
             painter.setPen(QColor(pal['text'] if focus else pal['muted']))
