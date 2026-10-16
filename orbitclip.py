@@ -538,6 +538,7 @@ class VaultRow(QFrame):
         if kind=='link' and safe_web_url(item.get('text','')):
             go=tool('link','Открыть ссылку в браузере',self.open_link)
             lay.addWidget(go)
+        lay.addWidget(tool('eye','Открыть подробный просмотр',lambda:window.preview_item(self.item_id)))
         lay.addWidget(tool('settings','Действия с записью',self.menu))
         if preview_data:
             names,rows,remaining=preview_data
@@ -684,9 +685,11 @@ class VaultWindow(QWidget):
         self.app_strip.setWidget(self.app_buttons_host)
         self.app_buttons_signature=None
         main.addWidget(self.app_strip)
-        self.search=QLineEdit();self.search.setPlaceholderText('Поиск по тексту, названию или категории  ·  Ctrl/Cmd + F')
+        self.search=QLineEdit();self.search.setPlaceholderText('⌕  Найти фрагмент по названию, тексту или категории')
         self.search.textChanged.connect(self.refresh);main.addWidget(self.search)
         self.counter=label('');main.addWidget(self.counter)
+        hint=label('Двойной клик — копировать  ·  глаз — полный предпросмотр  ·  ★ — избранное')
+        main.addWidget(hint)
         self.scroll=QScrollArea();self.scroll.setWidgetResizable(True)
         self.contents=QWidget();self.contents.setMinimumWidth(0);self.rows=QVBoxLayout(self.contents)
         self.rows.setContentsMargins(1,1,5,2);self.rows.setSpacing(5)
@@ -944,6 +947,39 @@ class VaultWindow(QWidget):
         for item in entries:self.rows.addWidget(VaultRow(self,item))
         self.rows.addStretch()
 
+
+    def preview_item(self,ident):
+        """Readable large text preview; never expose encrypted content."""
+        item=self.app.vault.find(ident)
+        if not item:return
+        encrypted=bool(item.get('encrypted'))
+        dialog=QDialog(self)
+        dialog.setWindowTitle('ORBITclip · Предпросмотр фрагмента')
+        dialog.resize(710,490)
+        outer=QVBoxLayout(dialog)
+        kind=item.get('kind','text')
+        name=str(item.get('title') or LABELS.get(kind,('','Текст'))[1])
+        title=QLabel(name)
+        title.setTextFormat(Qt.PlainText)
+        title.setStyleSheet('font-size:16px;font-weight:700')
+        outer.addWidget(title)
+        source=item.get('source_app') or 'Неизвестно'
+        outer.addWidget(label(f'Тип: {kind} · Источник: {source} · '+tooltip_time(item.get('ts',0))))
+        content=QPlainTextEdit()
+        content.setReadOnly(True)
+        content.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        content.setPlainText('🔒 Защищённая запись. Для доступа используй действие «Копировать».'
+                             if encrypted else str(item.get('text',''))[:200_000])
+        outer.addWidget(content,1)
+        bottom=QHBoxLayout()
+        bottom.addWidget(action('Копировать',lambda:self.copy_item(ident)))
+        if not encrypted:
+            bottom.addWidget(action('В очередь',lambda:self.app.enqueue_item(ident)))
+            bottom.addWidget(action('Преобразования…',lambda:self.smart_item(ident)))
+        bottom.addStretch()
+        bottom.addWidget(action('Закрыть',dialog.accept,primary=True))
+        outer.addLayout(bottom)
+        dialog.exec()
 
     def copy_item(self,ident):
         item=self.app.vault.find(ident)
