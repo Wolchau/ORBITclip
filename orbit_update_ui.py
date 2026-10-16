@@ -5,6 +5,7 @@ thread; downloaded ZIPs are validated by the stdlib updater before restart.
 """
 import queue
 import threading
+from zipfile import ZipFile
 from pathlib import Path
 from datetime import datetime
 
@@ -19,6 +20,9 @@ from orbit_update import (UpdateError, stage_archive, launch_after_exit,
                           backup_location, log_update, read_history, version_tuple)
 from orbit_update_chain import (list_releases, download_and_prepare,
                                 launch_chain_after_exit)
+from orbit_update_full import (latest_snapshot_release, stage_snapshot,
+                               launch_snapshot_after_exit)
+from orbit_update import download_release
 
 
 class UpdateWindow(QWidget):
@@ -26,6 +30,7 @@ class UpdateWindow(QWidget):
         super().__init__(None, Qt.Window)
         self.app=app
         self.releases=[]
+        self.snapshot_release=None
         self.prepared=None
         self.events=queue.Queue()
         self.busy=False
@@ -47,8 +52,8 @@ class UpdateWindow(QWidget):
         self.progress.setValue(0)
         self.progress.setFormat('Ожидание')
         lay.addWidget(self.progress)
-        warn=QLabel('Проверка запускается только по запросу. При недоступном приватном '
-                    'репозитории можно выбрать скачанный ZIP вручную.')
+        warn=QLabel('Обновление использует один полный пакет, без пропущенных патчей. '
+                    'Проверка запускается вручную. ZIP можно выбрать с диска.')
         warn.setWordWrap(True)
         warn.setStyleSheet('font-size:11px;opacity:0.7')
         lay.addWidget(warn)
@@ -108,15 +113,25 @@ class UpdateWindow(QWidget):
 
     def check_updates(self):
         self.releases=[]
+        self.snapshot_release=None
         self.prepared=None
         token=self.auth.text().strip()
-        self._start(lambda:('releases',list_releases(CLIENT_VERSION,token=token)))
+        self._start(lambda:('snapshot_release',latest_snapshot_release(CLIENT_VERSION,token=token)))
 
     def fetch_update(self):
-        if not self.releases:
-            return
+        if not self.snapshot_release:return
         token=self.auth.text().strip()
-        self._start(self._download_job,list(self.releases),token)
+        self._start(self._download_full_job,dict(self.snapshot_release),token)
+
+    def _download_full_job(self,release,token):
+        archive=download_release(release,token=token,
+            progress=lambda done,total:self.events.put(('full_progress',(done,total))))
+        try:
+            folder,plan=stage_snapshot(archive,self.app_root)
+            return ('prepared_full',(folder,plan))
+        finally:
+            import shutil
+            shutil.rmtree(archive.parent,ignore_errors=True)
 
     def _download_job(self,releases,token):
         def progress(index,count,done,total):
@@ -133,12 +148,26 @@ class UpdateWindow(QWidget):
         path,_=QFileDialog.getOpenFileName(self,'Открыть патч ORBITclip','','ZIP (*.zip)')
         if path:
             self.releases=[]
-            self._start(lambda:('prepared',stage_archive(Path(path),self.app_root)))
+            self.snapshot_release=None
+            def prepare():
+                with ZipFile(path) as z:
+                    is_full='ORBITclip/update-manifest.json' in z.namelist()
+                if is_full:
+                    return ('prepared_full',stage_snapshot(Path(path),self.app_root))
+                return ('prepared',stage_archive(Path(path),self.app_root))
+            self._start(prepare)
 
     def _poll(self):
         try:
             kind,value=self.events.get_nowait()
         except queue.Empty:
+            return
+        if kind=='full_progress':
+            received,total=value
+            self.progress.setRange(0,100 if total else 0)
+            if total:
+                self.progress.setValue(min(100,received*100//total))
+                self.progress.setFormat('Загрузка полного пакета · %p%')
             return
         if kind=='chain_progress':
             index,count,done,total=value
@@ -162,19 +191,18 @@ class UpdateWindow(QWidget):
         self.progress.setValue(100)
         self.progress.setFormat('Готово')
         result, payload=value
-        if result=='releases':
-            self.releases=payload
-            if not payload:
+        if result=='snapshot_release':
+            self.snapshot_release=payload
+            if payload is None:
                 self.status.setText('Установлена последняя доступная версия.')
                 log_update('check','Новых версий не найдено')
             else:
-                target=max(payload,key=lambda release:version_tuple(release['version']))['version']
                 self.status.setText(
-                    f"Доступна {target}. Найдено {len(payload)} более новых релизов. "
-                    "Приложение самостоятельно найдёт цепочку совместимых патчей, "
-                    "скачает их и проверит на временной копии до установки.")
+                    f"Доступна {payload['version']}. Полный пакет: "
+                    f"{payload['size']//1024} КБ. Установка сразу до этой версии, "
+                    "без скачивания промежуточных патчей.")
                 self.download_button.setEnabled(True)
-                log_update('check','Доступен релиз '+target)
+                log_update('check','Доступен полный пакет '+payload['version'])
         elif result=='prepared_chain':
             plan,manifests=payload
             self.prepared=('chain',plan,manifests)
@@ -188,6 +216,18 @@ class UpdateWindow(QWidget):
             self.install_button.setEnabled(True)
             log_update('validated',f'Полная цепочка проверена: {len(manifests)} этапов',
                        old_version=manifests[0]['from_version'],new_version=target)
+        elif result=='prepared_full':
+            stage,plan=payload
+            self.prepared=('full',stage,[plan])
+            self.info.setText(
+                f"Установлена {CLIENT_VERSION} → подготовлена {plan['to_version']}")
+            self.status.setText(
+                "Полный пакет проверен. Пользовательские файлы останутся нетронутыми. "
+                "После выхода программа будет обновлена за один переход; "
+                "при ошибке файлы приложения восстановятся.")
+            self.install_button.setEnabled(True)
+            log_update('validated','Полный накопительный пакет проверен',
+                       old_version=plan['from_version'],new_version=plan['to_version'])
         elif result=='prepared':
             stage,manifest=payload
             self.prepared=('single',stage,[manifest])
@@ -225,14 +265,16 @@ class UpdateWindow(QWidget):
         manifest={'from_version':manifests[0]['from_version'],
                   'to_version':manifests[-1]['to_version']}
         text=(f"Обновить ORBITclip {CLIENT_VERSION} → {manifest['to_version']} "
-              f"({len(manifests)} патчей)?\n\n"
+              f"({'один полный пакет' if mode=='full' else str(len(manifests))+' патчей'})?\n\n"
               "Все окна закроются. После успешной установки программа "
               "автоматически запустится. При ошибке исходные файлы восстанавливаются.")
         if QMessageBox.question(self,'Подтвердить установку',text,
                                 QMessageBox.Yes|QMessageBox.No)!=QMessageBox.Yes:return
         try:
             import os
-            if mode=='chain':
+            if mode=='full':
+                launch_snapshot_after_exit(stage,self.app_root,os.getpid())
+            elif mode=='chain':
                 launch_chain_after_exit(stage,self.app_root,os.getpid())
             else:
                 launch_after_exit(stage,self.app_root,os.getpid())
