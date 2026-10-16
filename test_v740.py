@@ -21,7 +21,7 @@ def method(name, cls='OrbitApp'):
 
 class Themes(unittest.TestCase):
     def test_palette_count(self):
-        self.assertEqual(CLIENT_VERSION,'7.4.2')
+        self.assertEqual(CLIENT_VERSION,'7.4.3')
         self.assertGreaterEqual(len(THEMES),5)
         self.assertIn('light', THEMES)
         self.assertEqual(normalize_theme('invalid'),'midnight')

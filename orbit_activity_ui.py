@@ -123,7 +123,6 @@ class AnalyticsWindow(QWidget):
     METRICS=[('clip_capture','Новых записей'),('clip_copy','Повторных копирований'),
              ('chat_in','Получено сообщений'),('chat_out','Отправлено сообщений'),
              ('file_in','Получено файлов'),('space_clip_in','Записей из пространств'),
-             ('ocr_run','Распознаваний OCR'),('screenshot','Снимков экрана'),
              ('wheel_commit','Выборов через прокрутку')]
 
     def __init__(self,app):

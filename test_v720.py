@@ -99,33 +99,16 @@ class LocalDataTests(unittest.TestCase):
         self.assertIn('Форматировать JSON',smart_actions('{"a":1}','json'))
         self.assertIn('Проверка JSON',smart_actions('{"missing": }','text'))
 
-    def test_fast_ocr_and_screenshot_tools_are_wired(self):
-        capture=ast.parse((ROOT/'orbit_capture.py').read_text())
-        capture_classes={n.name:n for n in capture.body if isinstance(n,ast.ClassDef)}
-        methods={n.name for n in capture_classes['ScreenshotEditor'].body if isinstance(n,ast.FunctionDef)}
-        self.assertTrue({'undo','snapshot','save','copy','ocr','set_mode'}.issubset(methods))
-        self.assertIn('crop',(ROOT/'orbit_capture.py').read_text())
-        core=ast.parse((ROOT/'orbitclip.py').read_text())
-        app=next(x for x in core.body if isinstance(x,ast.ClassDef) and x.name=='OrbitApp')
-        functions={x.name for x in app.body if isinstance(x,ast.FunctionDef)}
-        self.assertTrue({'capture_ocr','capture_screen','recognize_capture','broadcast_workspace','handle_workspace_message'}.issubset(functions))
-        self.assertIn('self.app.workspaces.publish',(ROOT/'orbitclip.py').read_text())
+    def test_retired_capture_and_ocr_are_absent(self):
+        self.assertFalse((ROOT/'orbit_capture.py').exists())
+        source=(ROOT/'orbitclip.py').read_text('utf-8')
+        self.assertNotIn('capture_ocr',source)
+        self.assertNotIn('capture_screen',source)
+        self.assertNotIn('ScreenshotEditor',source)
+        requirements=(ROOT/'requirements-client.txt').read_text('utf-8').lower()
+        self.assertNotIn('pytesseract',requirements)
+        self.assertNotIn('pillow',requirements)
+        self.assertIn('self.app.workspaces.publish',source)
 
-    def test_ocr_real_image_using_installed_tesseract(self):
-        # Extract Qt-independent recognize_png AST to validate real OCR without PySide6.
-        syntax=ast.parse((ROOT/'orbit_capture.py').read_text())
-        func=next(n for n in syntax.body if isinstance(n,ast.FunctionDef) and n.name=='recognize_png')
-        scope={'io':io,'RuntimeError':RuntimeError,'Exception':Exception,'str':str}
-        exec(compile(ast.fix_missing_locations(ast.Module(body=[func],type_ignores=[])), '<ocr>','exec'),scope)
-        img=Image.new('RGB',(460,94),'white')
-        draw=ImageDraw.Draw(img)
-        filename=Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')
-        if not filename.is_file():self.skipTest('OCR image fixture uses a Linux font')
-        font=ImageFont.truetype(str(filename),32)
-        draw.text((14,15),'HELLO 2026',fill='black',font=font)
-        out=io.BytesIO();img.save(out,format='PNG')
-        try:recognized=scope['recognize_png'](out.getvalue())
-        except (ImportError,RuntimeError,FileNotFoundError) as exc:self.skipTest(str(exc))
-        self.assertIn('HELLO',recognized.upper())
 
 if __name__=='__main__':unittest.main()

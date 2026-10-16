@@ -48,7 +48,6 @@ from orbit_smart import smart_actions, action_catalog
 from orbit_context import foreground_app
 from orbit_workspaces import Workspaces
 from orbit_workspace_ui import WorkspaceWindow
-from orbit_capture import RegionCapture, ScreenshotEditor
 from orbit_appearance import THEMES, palette, stylesheet, normalize_theme
 from orbit_notifications import NotificationStore
 from orbit_analytics import AnalyticsStore
@@ -260,8 +259,6 @@ class OrbitPill(QWidget):
             menu.addAction('SQL Explorer · база и ER-схема…',self.app.open_sql_explorer)
             menu.addAction('Уведомления…',self.app.open_notification_center)
             menu.addAction('Моя аналитика…',self.app.open_analytics)
-            menu.addAction('Быстрый OCR…',self.app.capture_ocr)
-            menu.addAction('Снимок экрана и редактор…',self.app.capture_screen)
             menu.addAction('Настройки…',self.app.open_settings)
             menu.addAction('Настроить прокрутку',self.app.edit_scroll_settings)
             menu.addAction('Диагностика Ctrl + колесо',self.app.wheel_diagnostics)
@@ -634,7 +631,7 @@ class VaultWindow(QWidget):
         title=QLabel('Библиотека фрагментов');title.setObjectName('heading')
         top.addWidget(title);top.addStretch()
         top.addWidget(action('Пространства…',self.app.open_workspaces,icon_name='remote'))
-        self.more_button=tool('settings','Дополнительные инструменты и настройки (категории, прокрутка, OCR…) ',self.open_tools_menu,20)
+        self.more_button=tool('settings','Дополнительные инструменты и настройки (категории, прокрутка…) ',self.open_tools_menu,20)
         self.more_button.setFixedSize(34,34)
         top.addWidget(self.more_button)
         main.addLayout(top)
@@ -693,8 +690,6 @@ class VaultWindow(QWidget):
         add(menu,'history','Порядок Ctrl + колесо…',self.app.edit_scroll_settings)
         add(menu,'clipboard','Коллекции по приложениям…',self.choose_source_app)
         menu.addSeparator()
-        add(menu,'document','Распознать текст (OCR)…',self.app.capture_ocr)
-        add(menu,'document','Снимок экрана и редактор…',self.app.capture_screen)
         add(menu,'remote','Управление пространствами…',self.app.open_workspaces)
         add(menu,'remote','Мессенджер…',self.app.open_chat)
         add(menu,'sql','SQL Explorer · ER-схема…',self.app.open_sql_explorer)
@@ -1840,7 +1835,6 @@ class OrbitApp:
         self.device=str(self.settings.get('remote_device') or secrets.token_hex(16))
         self.identity=DeviceIdentity()
         self.workspaces=Workspaces(self.identity)
-        self.ocr_events=queue.Queue()
         self.ensure_nickname()
         self.selected_peer=str(self.settings.get('selected_peer',''))
         self.peer_bridges={}
@@ -2055,8 +2049,6 @@ class OrbitApp:
         menu.addAction('Общие пространства',lambda checked=False:self.open_workspaces())
         menu.addAction('Уведомления',lambda checked=False:self.open_notification_center())
         menu.addAction('Моя аналитика',lambda checked=False:self.open_analytics())
-        menu.addAction('Быстрый OCR',lambda checked=False:self.capture_ocr())
-        menu.addAction('Редактор снимка',lambda checked=False:self.capture_screen())
         menu.addSeparator()
         menu.addAction('SQL Explorer…',lambda checked=False:self.open_sql_explorer())
         menu.addAction('Настройки…',lambda checked=False:self.open_settings())
@@ -2173,40 +2165,6 @@ class OrbitApp:
         if self.workspace_window is None:self.workspace_window=WorkspaceWindow(self)
         self.workspace_window.refresh()
         self.workspace_window.show();self.workspace_window.raise_();self.workspace_window.activateWindow()
-
-    def capture_screen(self):
-        self.analytics.record('screenshot')
-        # An image editor is deliberately distinct from the one-action OCR flow.
-        self.capture_window=RegionCapture(self.edit_capture)
-
-    def capture_ocr(self):
-        self.analytics.record('ocr_run')
-        self.capture_window=RegionCapture(self.recognize_capture)
-
-    def recognize_capture(self,pixmap):
-        # QPixmap belongs to the GUI thread. Serialize pixels there; run Tesseract
-        # off-thread so the desktop remains responsive while OCR runs.
-        from PySide6.QtCore import QBuffer, QIODevice
-        data=QBuffer();data.open(QIODevice.WriteOnly)
-        pixmap.save(data,'PNG')
-        png=bytes(data.data())
-        self.toast.pop('Распознаю выделенную область…')
-        def process():
-            try:
-                from orbit_capture import recognize_png
-                self.ocr_events.put(('text',recognize_png(png)))
-            except Exception as exc:self.ocr_events.put(('error',str(exc)[:300]))
-        threading.Thread(target=process,name='orbit-ocr',daemon=True).start()
-
-    def edit_capture(self,pixmap):
-        def received(text):
-            if text:
-                self.add_to_history(text,force=True)
-                self.copy_text(text)
-                self.toast.pop('OCR: текст добавлен в личную историю')
-            else:self.toast.pop('OCR: текст не найден')
-        self.screenshot_editor=ScreenshotEditor(pixmap,received)
-        self.screenshot_editor.show();self.screenshot_editor.raise_()
 
     def broadcast_workspace(self,wid,envelope,exclude=None):
         """Hub-and-spoke via pairwise AES-GCM channels; owner relays to member devices."""
@@ -2560,14 +2518,6 @@ class OrbitApp:
             self.keepalive_stop.wait(10)
 
     def pump_events(self):
-        for _ in range(5):
-            try:status,value=self.ocr_events.get_nowait()
-            except queue.Empty:break
-            if status=='text' and value:
-                self.copy_text(value)
-                self.toast.pop('OCR: текст скопирован и добавлен в личную историю')
-            elif status=='text':self.toast.pop('OCR: текст не обнаружен')
-            else:self.toast.pop('Ошибка OCR: '+value[:140])
         self.pump_directory()
         self.process_peer_events()
         for _ in range(20):
