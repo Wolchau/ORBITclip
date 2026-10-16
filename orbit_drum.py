@@ -225,8 +225,15 @@ class DrumBubble(QWidget):
             painter.fillPath(shape, shadow)
             painter.restore()
 
-        top = QColor(pal['raised'])
-        bottom = QColor(pal['surface'])
+        material=skin['material']
+        if material=='glass':
+            top=QColor('#497F94');bottom=QColor('#152F43')
+        elif material=='metal':
+            top=QColor('#A7B2BC');bottom=QColor('#465563')
+        elif material=='obsidian':
+            top=QColor('#292438');bottom=QColor('#080D18')
+        else:
+            top=QColor(pal['raised']);bottom=QColor(pal['surface'])
         # Front is gently lifted; rear strips darken as they curve away.
         top.setAlpha(int((skin['top_alpha'] if intensity > .72 else skin['top_alpha']*.86) * intensity))
         bottom.setAlpha(int((skin['bottom_alpha'] if intensity > .72 else skin['bottom_alpha']*.78) * intensity))
@@ -241,7 +248,7 @@ class DrumBubble(QWidget):
         painter.save()
         painter.setClipPath(shape)
         sheen = QLinearGradient(face['top_left'], y0, face['top_right'], y0)
-        bright = QColor(pal['text'])
+        bright = QColor(skin['highlight'])
         bright.setAlpha(int(skin['reflection'] * intensity))
         dark = QColor(pal['bg'])
         dark.setAlpha(int(34 * intensity))
@@ -277,6 +284,50 @@ class DrumBubble(QWidget):
         painter.drawLine(QPointF(face['top_left'] + 3, y0+2), QPointF(face['bottom_left'] + 3, y1-2))
         painter.drawLine(QPointF(face['top_right'] - 3, y0+2), QPointF(face['bottom_right'] - 3, y1-2))
 
+        # Material details must be obvious at a glance, not alpha variations.
+        if material=='glass':
+            painter.save()
+            painter.setClipPath(shape)
+            glass_shine=QColor('#E3F8FF');glass_shine.setAlpha(int(108*intensity))
+            painter.setPen(QPen(glass_shine,1.15))
+            painter.drawLine(QPointF(face['top_left']+21,y0+2),
+                             QPointF(face['bottom_left']+44,y1-2))
+            painter.drawLine(QPointF(face['top_right']-24,y0+2),
+                             QPointF(face['bottom_right']-15,y1-2))
+            if abs(face['relative'])<.55:
+                for at in (face['top_left']+18,face['top_right']-18):
+                    painter.setBrush(QColor(176,229,245,int(93*intensity)))
+                    painter.setPen(Qt.NoPen)
+                    painter.drawEllipse(QPointF(at,(y0+y1)/2),3,3)
+            painter.restore()
+        elif material=='metal':
+            painter.save()
+            painter.setClipPath(shape)
+            steel=QColor('#DCE3E8');steel.setAlpha(int(126*intensity))
+            steel_dark=QColor('#101822');steel_dark.setAlpha(int(125*intensity))
+            for at in (face['top_left']+13,face['top_right']-13):
+                middle=(y0+y1)/2
+                painter.setPen(QPen(steel_dark,1.1));painter.setBrush(steel)
+                painter.drawEllipse(QPointF(at,middle),3.7,3.7)
+                painter.setPen(QPen(steel_dark,1))
+                painter.drawLine(QPointF(at-2,middle),QPointF(at+2,middle))
+            painter.setPen(QPen(steel_dark,1.1))
+            for tick in range(int(face['top_left'])+26,int(face['top_right'])-26,19):
+                painter.drawLine(QPointF(tick,y0+3),QPointF(tick+4,y0+3))
+            painter.restore()
+        elif material=='obsidian':
+            painter.save()
+            painter.setClipPath(shape)
+            accent=QColor(skin['highlight'])
+            accent.setAlpha(int(215*intensity))
+            painter.setPen(QPen(accent,2.1,Qt.SolidLine,Qt.RoundCap))
+            painter.drawLine(QPointF(face['top_right']-11,y0+9),
+                             QPointF(face['bottom_right']-11,y1-9))
+            painter.setBrush(accent);painter.setPen(Qt.NoPen)
+            if abs(face['relative'])<.55:
+                painter.drawEllipse(QPointF(face['top_right']-25,(y0+y1)/2),4,4)
+            painter.restore()
+
         is_front = abs(face['relative']) < .52
         if is_front:
             accent = QColor(pal['accent'])
@@ -291,7 +342,9 @@ class DrumBubble(QWidget):
         font.setPixelSize(13 if is_front else max(10, int(12 * max(.78, face['facing']))))
         font.setWeight(QFont.DemiBold if is_front else QFont.Normal)
         painter.setFont(font)
-        fg = QColor(pal['text'] if is_front else pal['muted'])
+        fg = QColor('#0E202B' if material=='metal' and is_front else
+                    '#F0F6F9' if material in ('glass','obsidian') and is_front else
+                    pal['text'] if is_front else pal['muted'])
         fg.setAlpha(int((247 if is_front else 195) * intensity))
         painter.setPen(fg)
         horizontal = min(face['top_left'], face['bottom_left']) + 23
@@ -369,8 +422,14 @@ class DrumBubble(QWidget):
                      if face['relative'] == 0]
         else:
             faces = visible_faces(cursor, count=len(entries))
+        painter.save()
+        factor=skin.get('width_scale',1.0)
+        painter.translate(195,0)
+        painter.scale(factor,1.0)
+        painter.translate(-195,0)
         for face in faces:
             self._draw_face(painter, face, self._preview(entries[face['index']]), pal)
+        painter.restore()
 
     def paintEvent(self, event):
         painter = QPainter(self)
