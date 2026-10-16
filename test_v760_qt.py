@@ -70,8 +70,7 @@ class QtFlowTests(unittest.TestCase):
                 painter=QPainter(picture)
                 drum.render(painter);painter.end()
                 self.assertEqual(picture.pixelColor(0,0).alpha(),0)
-                pixels=tuple(picture.pixelColor(x,y).name(QImagePixelName) if False else
-                             picture.pixelColor(x,y).rgba()
+                pixels=tuple(picture.pixelColor(x,y).rgba()
                              for x,y in ((195,124),(195,158),(195,189),(50,158)))
                 signatures.append(pixels)
             self.assertEqual(len(set(signatures)),len(DRUM_STYLES))
