@@ -12,7 +12,7 @@ CORE=(ROOT/'orbitclip.py').read_text('utf-8')
 
 class FlowTests(unittest.TestCase):
     def test_version_and_nonpersistent_bounded_queue(self):
-        self.assertEqual(CLIENT_VERSION,'7.6.3')
+        self.assertEqual(CLIENT_VERSION,'7.7.0')
         queue=PasteQueue()
         self.assertIsNone(queue.pop())
         self.assertFalse(queue.push(''))
@@ -48,7 +48,7 @@ class FlowTests(unittest.TestCase):
         self.assertIn('def dragEnterEvent(self,event):',CORE)
         self.assertIn('def dropEvent(self,event):',CORE)
         self.assertIn('def send_files(self,paths):',CORE)
-        self.assertIn('if size>MAX_FILE_SIZE:',CORE)
+        self.assertIn('if not file.is_file() or file.stat().st_size>MAX_FILE_SIZE:',CORE)
         self.assertIn("self.app.send_to_active({",CORE)
 
 

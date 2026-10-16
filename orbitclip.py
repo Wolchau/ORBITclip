@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QSize, QPoint, QRect, QEvent, QObject, QUrl, QStandardPaths
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QBrush, QCursor, QKeySequence, QDesktopServices, QTextLayout, QTextOption
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QBrush, QCursor, QKeySequence, QDesktopServices, QTextLayout, QTextOption, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QToolButton, QLineEdit, QScrollArea, QPlainTextEdit, QComboBox, QDialog, QMenu,
@@ -60,6 +60,10 @@ from orbit_select import OrbitSelect
 from orbit_flow import PasteQueue, normalize_exclusions, is_excluded
 from orbit_global_shortcuts import FlowShortcuts
 from orbit_palette import CommandPalette
+from orbit_drum_preview import DrumLivePreview
+from orbit_update_ui import UpdateWindow
+from orbit_update import consume_status
+from orbit_messenger_ui import FileReviewDialog, validate_dropped_files
 
 APP_NAME = 'ORBITclip'
 QT_CLIENT_VERSION = CLIENT_VERSION
@@ -535,6 +539,7 @@ class VaultRow(QFrame):
         if kind=='link' and safe_web_url(item.get('text','')):
             go=tool('link','Открыть ссылку в браузере',self.open_link)
             lay.addWidget(go)
+        lay.addWidget(tool('eye','Открыть подробный просмотр',lambda:window.preview_item(self.item_id)))
         lay.addWidget(tool('settings','Действия с записью',self.menu))
         if preview_data:
             names,rows,remaining=preview_data
@@ -681,9 +686,11 @@ class VaultWindow(QWidget):
         self.app_strip.setWidget(self.app_buttons_host)
         self.app_buttons_signature=None
         main.addWidget(self.app_strip)
-        self.search=QLineEdit();self.search.setPlaceholderText('Поиск по тексту, названию или категории  ·  Ctrl/Cmd + F')
+        self.search=QLineEdit();self.search.setPlaceholderText('⌕  Найти фрагмент по названию, тексту или категории')
         self.search.textChanged.connect(self.refresh);main.addWidget(self.search)
         self.counter=label('');main.addWidget(self.counter)
+        hint=label('Двойной клик — копировать  ·  глаз — полный предпросмотр  ·  ★ — избранное')
+        main.addWidget(hint)
         self.scroll=QScrollArea();self.scroll.setWidgetResizable(True)
         self.contents=QWidget();self.contents.setMinimumWidth(0);self.rows=QVBoxLayout(self.contents)
         self.rows.setContentsMargins(1,1,5,2);self.rows.setSpacing(5)
@@ -942,6 +949,39 @@ class VaultWindow(QWidget):
         self.rows.addStretch()
 
 
+    def preview_item(self,ident):
+        """Readable large text preview; never expose encrypted content."""
+        item=self.app.vault.find(ident)
+        if not item:return
+        encrypted=bool(item.get('encrypted'))
+        dialog=QDialog(self)
+        dialog.setWindowTitle('ORBITclip · Предпросмотр фрагмента')
+        dialog.resize(710,490)
+        outer=QVBoxLayout(dialog)
+        kind=item.get('kind','text')
+        name=str(item.get('title') or LABELS.get(kind,('','Текст'))[1])
+        title=QLabel(name)
+        title.setTextFormat(Qt.PlainText)
+        title.setStyleSheet('font-size:16px;font-weight:700')
+        outer.addWidget(title)
+        source=item.get('source_app') or 'Неизвестно'
+        outer.addWidget(label(f'Тип: {kind} · Источник: {source} · '+tooltip_time(item.get('ts',0))))
+        content=QPlainTextEdit()
+        content.setReadOnly(True)
+        content.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        content.setPlainText('🔒 Защищённая запись. Для доступа используй действие «Копировать».'
+                             if encrypted else str(item.get('text',''))[:200_000])
+        outer.addWidget(content,1)
+        bottom=QHBoxLayout()
+        bottom.addWidget(action('Копировать',lambda:self.copy_item(ident)))
+        if not encrypted:
+            bottom.addWidget(action('В очередь',lambda:self.app.enqueue_item(ident)))
+            bottom.addWidget(action('Преобразования…',lambda:self.smart_item(ident)))
+        bottom.addStretch()
+        bottom.addWidget(action('Закрыть',dialog.accept,primary=True))
+        outer.addLayout(bottom)
+        dialog.exec()
+
     def copy_item(self,ident):
         item=self.app.vault.find(ident)
         if not item:return
@@ -1025,7 +1065,7 @@ class VaultWindow(QWidget):
 
 class MessageBubble(QFrame):
     """Compact Telegram-style bubble, keeping message controls within the bubble."""
-    def __init__(self, app, content, own=False, stamp='', saved_path='', sender='', on_reply=None, on_forward=None, on_delete=None):
+    def __init__(self, app, content, own=False, stamp='', saved_path='', sender='', on_reply=None, on_forward=None, on_delete=None, grouped=False):
         super().__init__();self.app=app
         self.content=content;self.own=own;self.on_reply=on_reply;self.on_forward=on_forward;self.on_delete=on_delete
         self.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1041,8 +1081,8 @@ class MessageBubble(QFrame):
         self.setMaximumWidth(475)
         self.setMinimumWidth(140)
         self.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Preferred)
-        inner=QVBoxLayout(self);inner.setContentsMargins(14,10,14,8);inner.setSpacing(4)
-        if not own and sender:
+        inner=QVBoxLayout(self);inner.setContentsMargins(14,7 if grouped else 10,14,8);inner.setSpacing(4)
+        if not own and sender and not grouped:
             who=QLabel(sender)
             who.setStyleSheet('color:'+theme['accent']+';font-size:10px;font-weight:600;')
             inner.addWidget(who)
@@ -1078,6 +1118,20 @@ class MessageBubble(QFrame):
                 info.addWidget(sub)
             line.addLayout(info,1)
             inner.addLayout(line)
+            # Local-only preview of saved attachments; no remote image fetching.
+            if file_path and file_path.is_file() and file_path.suffix.lower() in (
+                    '.png','.jpg','.jpeg','.webp','.gif'):
+                reader=QImageReader(str(file_path))
+                reader.setAutoTransform(True)
+                reader.setScaledSize(QSize(280,180))
+                if reader.canRead():
+                    image=reader.read()
+                    if not image.isNull():
+                        thumbnail=QLabel()
+                        thumbnail.setPixmap(QPixmap.fromImage(image))
+                        thumbnail.setAlignment(Qt.AlignLeft)
+                        thumbnail.setToolTip('Предпросмотр сохранённого изображения')
+                        inner.addWidget(thumbnail)
         else:
             txt=str(content.get('text',''))
             excerpt=QLabel(truncate(txt,2600))
@@ -1619,6 +1673,7 @@ class ChatWindow(QWidget):
             self.msg_layout.addStretch();return
         messages=self.app.store.fetch(place,100)
         current_date=None;found=0
+        previous_direction=None;previous_ts=0
         needle=self.search_messages.text().strip().casefold()
         channel=self.channel.currentData() or 'all'
         for record in sorted(messages,key=lambda r:(float(r.get('ts',0)),int(r.get('id',0)))):
@@ -1637,13 +1692,20 @@ class ChatWindow(QWidget):
                 day_lbl.setStyleSheet('color:#8DA6B4;font-size:10px;margin:7px 0 5px;')
                 self.msg_layout.addWidget(day_lbl);current_date=day
             own=record.get('direction')=='out'
+            direction=record.get('direction')
+            grouped=(previous_direction==direction and
+                     float(record['ts'])-previous_ts<=300 and
+                     float(record['ts'])>=previous_ts)
+            previous_direction=direction
+            previous_ts=float(record['ts'])
             wrap=QHBoxLayout();wrap.setSpacing(0)
             if own:wrap.addStretch(1)
             sender=(self.app.identity.trusted.get(self.app.selected_peer,{}).get('name','Устройство') if not own else '')
             bubble=MessageBubble(self.app,content,own,datetime.fromtimestamp(record['ts']).strftime('%H:%M'),
                                  saved_path=record.get('saved_path',''),sender=sender,
                                  on_reply=self.reply_to_message,on_forward=self.forward_message,
-                                 on_delete=lambda loc=place,mid=record['id']:self.delete_message(loc,mid))
+                                 on_delete=lambda loc=place,mid=record['id']:self.delete_message(loc,mid),
+                                 grouped=grouped)
             wrap.addWidget(bubble)
             if not own:wrap.addStretch(1)
             row=QWidget();row.setLayout(wrap)
@@ -1710,14 +1772,18 @@ class ChatWindow(QWidget):
     def send_files(self,paths):
         if self.app.offline:return error(self,'В настройках включён режим оффлайн')
         if not self.app.active_channel()[0]:return error(self,'Сначала выбери получателя')
+        valid,rejected=validate_dropped_files(paths)
+        if not valid:
+            return error(self,'Нет подходящих файлов. Максимальный размер каждого — 3 МБ.')
+        review=FileReviewDialog(valid,rejected,self)
+        if review.exec()!=QDialog.Accepted:
+            return
         sent=0
-        for path in list(paths)[:10]:
-            file=Path(path)
+        for file,_ in valid:
             try:
-                if not file.is_file():continue
-                size=file.stat().st_size
-                if size>MAX_FILE_SIZE:
-                    error(self,f'«{file.name}»: превышен лимит 3 МБ')
+                # Revalidate after confirmation, before reading changed files.
+                if not file.is_file() or file.stat().st_size>MAX_FILE_SIZE:
+                    error(self,f'«{file.name}»: файл изменён или слишком велик')
                     continue
                 raw=file.read_bytes()
                 if len(raw)>MAX_FILE_SIZE:continue
@@ -1729,7 +1795,7 @@ class ChatWindow(QWidget):
                 'bytes':base64.b64encode(raw).decode('ascii')})
             if not ok:break
             sent+=1
-        if sent:self.app.toast.pop(f'Отправляется файлов: {sent}')
+        if sent:self.app.toast.pop(f'Отправлено в очередь передачи: {sent}')
 
     def dragEnterEvent(self,event):
         if event.mimeData().hasUrls() and any(u.isLocalFile() for u in event.mimeData().urls()):
@@ -1934,6 +2000,7 @@ class PreferencesWindow(QWidget):
         lay.addWidget(self.drum_index)
 
         self.drum_sliders=[]
+        self.drum_sliders_by_key={}
         def drum_slider(caption,key,low,high,suffix=''):
             line=QHBoxLayout()
             label_text=QLabel(caption)
@@ -1951,6 +2018,7 @@ class PreferencesWindow(QWidget):
                 lambda n,k=key,v=value,unit=suffix:(v.setText(str(n)+unit),app.set_drum_option(k,n)))
             lay.addLayout(line)
             self.drum_sliders.append(slider)
+            self.drum_sliders_by_key[key]=(slider,value,suffix)
         drum_slider('Прозрачность барабана','opacity',35,100,'%')
         drum_slider('Видимость соседей','neighbor_opacity',5,100,'%')
         drum_slider('Боковой отступ соседей','neighbor_gap',0,65,' px')
@@ -1962,6 +2030,13 @@ class PreferencesWindow(QWidget):
             for widget in self.drum_controls:widget.setEnabled(active)
         self.wheel_view.currentIndexChanged.connect(sync_drum_controls)
         sync_drum_controls()
+        lay.addWidget(label('Визуальная настройка барабана'))
+        self.drum_live=DrumLivePreview(app,self)
+        lay.addWidget(self.drum_live)
+        preview_buttons=QHBoxLayout()
+        preview_buttons.addWidget(action('Вернуть настройки барабана',self.reset_drum_settings))
+        preview_buttons.addStretch(1)
+        lay.addLayout(preview_buttons)
         lay.addWidget(label('Приватность буфера'))
         self.exclusions=QLineEdit(', '.join(app.excluded_apps))
         self.exclusions.setPlaceholderText('Приложения: 1Password, KeePassXC, …')
@@ -1985,6 +2060,7 @@ class PreferencesWindow(QWidget):
         shortcuts=QHBoxLayout()
         shortcuts.addWidget(action('Уведомления…',app.open_notification_center))
         shortcuts.addWidget(action('Моя аналитика…',app.open_analytics))
+        shortcuts.addWidget(action('Обновления…',app.open_updates))
         lay.addLayout(shortcuts)
         self.status=label('')
         lay.addWidget(self.status)
@@ -1994,6 +2070,43 @@ class PreferencesWindow(QWidget):
         self.offline.toggled.connect(app.set_offline)
         self.paste.toggled.connect(app.set_paste_on_release)
         self.refresh_status()
+
+    def refresh_drum_preview(self):
+        if hasattr(self,'drum_live'):
+            self.drum_live.repaint_example()
+
+    def reset_drum_settings(self):
+        from orbit_drum_styles import normalize_drum_style
+        from orbit_drum_layout import DEFAULTS
+        self.app.drum_options=dict(DEFAULTS)
+        self.app.set_drum_style('minimal')
+        if isinstance(self.app.bubble,DrumBubble):
+            self.app.bubble.set_options(self.app.drum_options)
+        self.drum_shape.blockSignals(True)
+        self.drum_shape.setCurrentIndex(self.drum_shape.findData(DEFAULTS['shape']))
+        self.drum_shape.blockSignals(False)
+        self.drum_position.blockSignals(True)
+        self.drum_position.setCurrentIndex(self.drum_position.findData(DEFAULTS['position']))
+        self.drum_position.blockSignals(False)
+        self.drum_header.blockSignals(True)
+        self.drum_header.setCurrentIndex(self.drum_header.findData(DEFAULTS['header']))
+        self.drum_header.blockSignals(False)
+        self.drum_header_place.blockSignals(True)
+        self.drum_header_place.setCurrentIndex(self.drum_header_place.findData(DEFAULTS['header_position']))
+        self.drum_header_place.blockSignals(False)
+        self.drum_index.blockSignals(True)
+        self.drum_index.setChecked(DEFAULTS['show_index'])
+        self.drum_index.blockSignals(False)
+        self.drum_skin.blockSignals(True)
+        self.drum_skin.setCurrentIndex(self.drum_skin.findData('minimal'))
+        self.drum_skin.blockSignals(False)
+        for key,(slider,value,suffix) in self.drum_sliders_by_key.items():
+            slider.blockSignals(True)
+            slider.setValue(DEFAULTS[key])
+            slider.blockSignals(False)
+            value.setText(str(DEFAULTS[key])+suffix)
+        self.app.save_settings()
+        self.refresh_drum_preview()
 
     def refresh_status(self):
         network='Сеть отключена' if self.app.offline else 'Сеть включена'
@@ -2063,13 +2176,14 @@ class OrbitApp:
         self._last_clip=''
         self.clipboard=self.qt.clipboard();self.clipboard.dataChanged.connect(self.on_clipboard)
         self.toast=FloatingToast()
+        self._last_update_status=consume_status()
         self.wheel_view=str(self.settings.get('wheel_view','compact'))
         self.drum_style=normalize_drum_style(self.settings.get('drum_style','minimal'))
         self.drum_options=normalize_drum_options(self.settings.get('drum_options'))
         self.animate_drum_categories=bool(self.settings.get('animate_drum_categories',True))
         self.bubble=DrumBubble(self) if self.wheel_view=='drum' else ScrollBubble()
         self.flow_palette=None
-        self.history=None;self.chat=None;self.online_window=None;self.preferences=None;self.workspace_window=None;self.sql_explorer=None;self.capture_window=None;self.screenshot_editor=None;self.notification_window=None;self.analytics_window=None
+        self.history=None;self.chat=None;self.online_window=None;self.preferences=None;self.update_window=None;self.workspace_window=None;self.sql_explorer=None;self.capture_window=None;self.screenshot_editor=None;self.notification_window=None;self.analytics_window=None
         self.tour_seen=bool(self.settings.get('tour_seen',False))
         raw_unread=self.settings.get('unread_peers',{})
         self.unread_peers={str(k):max(0,int(v)) for k,v in raw_unread.items() if isinstance(k,str) and isinstance(v,int) and not isinstance(v,bool)} if isinstance(raw_unread,dict) else {}
@@ -2094,6 +2208,9 @@ class OrbitApp:
         self.restore_remote()
         self.start_peer_bridges()
         self.save_settings()
+        if self._last_update_status:
+            result=self._last_update_status
+            QTimer.singleShot(1300,lambda:self.toast.pop(result['message']))
 
     def ensure_nickname(self):
         if self.identity.name_confirmed and self.identity.name.strip():
@@ -2134,6 +2251,7 @@ class OrbitApp:
         if isinstance(self.bubble,DrumBubble):
             self.bubble.set_options(validated)
         self.save_settings()
+        if self.preferences:self.preferences.refresh_drum_preview()
 
     def set_drum_style(self,style):
         value=normalize_drum_style(style)
@@ -2141,6 +2259,7 @@ class OrbitApp:
         self.drum_style=value
         if isinstance(self.bubble,DrumBubble):self.bubble.set_style(value)
         self.save_settings()
+        if self.preferences:self.preferences.refresh_drum_preview()
 
     def set_animate_drum_categories(self,enabled):
         self.animate_drum_categories=bool(enabled)
@@ -2158,6 +2277,7 @@ class OrbitApp:
         for widget in self.qt.allWidgets():
             if isinstance(widget,OrbitSelect):widget.set_theme(value)
         if isinstance(self.bubble,DrumBubble):self.bubble.update()
+        if self.preferences:self.preferences.refresh_drum_preview()
         if self.chat:
             self.chat.apply_theme()
             if self.chat.isVisible() and self.chat.pages.currentIndex()==0:
@@ -2184,6 +2304,7 @@ class OrbitApp:
         hm.addAction('Моя аналитика',lambda checked=False:self.open_analytics())
         hm.addSeparator()
         hm.addAction('Настройки…',lambda checked=False:self.open_settings())
+        hm.addAction('Обновления…',lambda checked=False:self.open_updates())
         self.tray_clock_action=hm.addAction('Скрыть виджет часов',lambda checked=False:self.set_clock_hidden_windows(not self.hide_clock_windows))
         hm.addSeparator()
         hm.addAction('Завершить ORBITclip',lambda checked=False:self.shutdown())
@@ -2253,6 +2374,13 @@ class OrbitApp:
         self.analytics_window.refresh()
         self.analytics_window.show();self.analytics_window.raise_();self.analytics_window.activateWindow()
 
+    def open_updates(self):
+        if self.update_window is None:
+            self.update_window=UpdateWindow(self)
+        self.update_window.show()
+        self.update_window.raise_()
+        self.update_window.activateWindow()
+
     def open_settings(self):
         if self.preferences is None:self.preferences=PreferencesWindow(self)
         self.preferences.exclusions.setText(', '.join(self.excluded_apps))
@@ -2267,6 +2395,7 @@ class OrbitApp:
             self.preferences.hide_clock.setChecked(self.hide_clock_windows)
             self.preferences.hide_clock.blockSignals(False)
         self.preferences.refresh_status()
+        self.preferences.refresh_drum_preview()
         self.preferences.show();self.preferences.raise_();self.preferences.activateWindow()
 
     def create_windows_tray(self):
@@ -2291,6 +2420,7 @@ class OrbitApp:
         menu.addSeparator()
         menu.addAction('SQL Explorer…',lambda checked=False:self.open_sql_explorer())
         menu.addAction('Настройки…',lambda checked=False:self.open_settings())
+        menu.addAction('Проверить обновления…',lambda checked=False:self.open_updates())
         self.tray_clock_action=menu.addAction('Показать виджет часов',lambda checked=False:self.set_clock_hidden_windows(not self.hide_clock_windows))
         menu.addSeparator()
         menu.addAction('Завершить ORBITclip',lambda checked=False:self.shutdown())
