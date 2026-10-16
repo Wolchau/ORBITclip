@@ -24,34 +24,58 @@ def version(folder):
         pass
     return None
 
-def install(folder):
-    folder=folder.resolve()
+def preflight(folder):
+    """Validate every path and hash before touching the installation."""
+    folder=Path(folder).resolve()
     data=json.loads((HERE/'manifest.json').read_text('utf-8'))
-    if data.get('app')!='ORBITclip' or version(folder)!=data['from_version']:
+    if data.get('app')!='ORBITclip' or version(folder)!=data.get('from_version'):
         raise RuntimeError('Версия ORBITclip не соответствует патчу: '+str(version(folder)))
-    changes=data['changes']
+    changes=data.get('changes')
+    if not isinstance(changes,list) or not changes:
+        raise RuntimeError('Пустой или повреждённый манифест обновления')
+    seen=set()
     for item in changes:
-        path=Path(item['path'])
-        if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0].startswith('.'):
-            raise RuntimeError('Недопустимый путь')
-        destination=folder/path
-        if destination.is_symlink():
-            raise RuntimeError('Ссылка вместо файла: '+str(path))
+        if not isinstance(item,dict) or not isinstance(item.get('path'),str):
+            raise RuntimeError('Некорректная запись манифеста')
+        rel=Path(item['path'])
+        if (rel.is_absolute() or '..' in rel.parts or not rel.parts
+                or rel.parts[0].startswith('.') or rel.as_posix() in seen):
+            raise RuntimeError('Недопустимый путь обновления: '+str(rel))
+        seen.add(rel.as_posix())
+        if item.get('before') is None and item.get('after') is None:
+            raise RuntimeError('Пустое изменение: '+str(rel))
+        destination=folder/rel
+        # Checking the leaf alone misses a symlink in parent directories.
+        for ancestor in (destination,*destination.parents):
+            if ancestor == folder.parent:
+                break
+            if ancestor.is_symlink():
+                raise RuntimeError('Символьная ссылка в пути обновления: '+str(rel))
         if item['before'] is not None:
             if not destination.is_file() or digest(destination.read_bytes())!=item['before']:
-                raise RuntimeError('Файл изменён, обновление остановлено: '+str(path))
+                raise RuntimeError('Файл изменён, обновление остановлено: '+str(rel))
         elif destination.exists():
-            raise RuntimeError('Новый путь уже существует: '+str(path))
+            raise RuntimeError('Новый путь уже существует: '+str(rel))
         if item['after'] is not None:
-            payload=HERE/'payload'/path
+            payload=HERE/'payload'/rel
             if not payload.is_file() or digest(payload.read_bytes())!=item['after']:
-                raise RuntimeError('Повреждён патч: '+str(path))
+                raise RuntimeError('Повреждён патч: '+str(rel))
     backup=folder/'.orbitclip_patch_backups'/('v'+data['from_version']+'_to_v'+data['to_version'])
-    if backup.exists():
+    if backup.exists() or backup.is_symlink():
         raise RuntimeError('Резервная копия предыдущей попытки уже существует: '+str(backup))
+    return folder,data,backup
+
+
+def install(folder,dry_run=False):
+    folder,data,backup=preflight(folder)
+    if dry_run:
+        print('Проверка пройдена; файлы не изменены:',len(data['changes']))
+        return
+    changes=data['changes']
     backup.mkdir(parents=True)
     applied=[]
     try:
+        # Finish ALL backups before the first write.
         for item in changes:
             rel=Path(item['path'])
             destination=folder/rel
@@ -62,6 +86,9 @@ def install(folder):
         for item in changes:
             rel=Path(item['path'])
             destination=folder/rel
+            # Mark BEFORE mutation: even a failure after os.replace succeeded
+            # must trigger rollback of that file.
+            applied.append(rel)
             if item['after'] is None:
                 destination.unlink()
             else:
@@ -74,10 +101,11 @@ def install(folder):
                 finally:
                     if os.path.exists(tmp):
                         os.unlink(tmp)
-            applied.append(rel)
+            if item['after'] is not None and digest(destination.read_bytes())!=item['after']:
+                raise RuntimeError('Контрольная сумма после записи не совпала: '+str(rel))
         if version(folder)!=data['to_version']:
             raise RuntimeError('Версия после установки не совпала')
-    except Exception:
+    except BaseException:
         for rel in reversed(applied):
             destination=folder/rel
             saved=backup/rel
@@ -92,6 +120,7 @@ def install(folder):
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--target',help='Папка ORBITclip; по умолчанию — рядом с патчем')
+    parser.add_argument('--dry-run',action='store_true',help='Проверить патч и файлы без установки')
     args=parser.parse_args()
     candidates=[
         HERE.parent/'ORBITclip', HERE.parent,
@@ -108,4 +137,4 @@ if __name__=='__main__':
         if not entered:
             raise SystemExit('Укажи путь: python apply_patch.py --target ПУТЬ')
         target=Path(entered).expanduser()
-    install(target)
+    install(target,dry_run=args.dry_run)
