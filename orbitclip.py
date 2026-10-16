@@ -55,6 +55,9 @@ from orbit_activity_ui import NotificationCenterWindow, AnalyticsWindow
 from orbit_drum import DrumBubble
 from orbit_drum_styles import DRUM_STYLES, normalize_drum_style
 from orbit_select import OrbitSelect
+from orbit_flow import PasteQueue, normalize_exclusions, is_excluded
+from orbit_global_shortcuts import FlowShortcuts
+from orbit_palette import CommandPalette
 
 APP_NAME = 'ORBITclip'
 QT_CLIENT_VERSION = CLIENT_VERSION
@@ -255,6 +258,8 @@ class OrbitPill(QWidget):
         elif e.button()==Qt.RightButton:
             menu=QMenu(self)
             menu.addAction('История буфера',self.app.open_history)
+            menu.addAction('⌕ Быстрый поиск и команды…',self.app.open_palette)
+            menu.addAction('Вставить следующий из очереди',self.app.paste_next_from_queue)
             menu.addAction('Связь и переписка',self.app.open_chat)
             menu.addAction('Устройства онлайн…',self.app.open_online)
             menu.addAction('Общие пространства…',self.app.open_workspaces)
@@ -579,6 +584,8 @@ class VaultRow(QFrame):
             host=root if root is not None else m
             host.addAction(icon(name),caption,callback)
         add('copy','Копировать',lambda:self.window.copy_item(self.item_id))
+        if not item.get('encrypted'):
+            add('history','Добавить в очередь вставки',lambda:self.window.app.enqueue_item(self.item_id))
         add('remote','Отправить устройству…',lambda:self.window.app.send_clip_item(self.item_id))
         if not item.get('encrypted'):
             add('code','Умные действия…',lambda:self.window.smart_item(self.item_id))
@@ -1796,6 +1803,17 @@ class PreferencesWindow(QWidget):
         self.wheel_view.currentIndexChanged.connect(
             lambda *_:self.drum_motion.setEnabled(self.wheel_view.currentData()=='drum'))
         lay.addWidget(self.drum_motion)
+        lay.addWidget(label('Приватность буфера'))
+        self.exclusions=QLineEdit(', '.join(app.excluded_apps))
+        self.exclusions.setPlaceholderText('Приложения: 1Password, KeePassXC, …')
+        self.exclusions.setToolTip('Точные названия процессов на Windows или приложений на macOS; через запятую')
+        lay.addWidget(self.exclusions)
+        lay.addWidget(action('Сохранить исключения',lambda:app.set_excluded_apps(self.exclusions.text())))
+        row_private=QHBoxLayout()
+        for minutes in (5,15,60):
+            row_private.addWidget(action(f'Пауза {minutes} мин',lambda checked=False,n=minutes:app.pause_capture_for(n)))
+        lay.addLayout(row_private)
+        lay.addWidget(action('Снять временную паузу',lambda:app.pause_capture_for(0)))
         self.hide_clock=None
         if platform.system() in ('Windows','Darwin'):
             self.hide_clock=QCheckBox('Скрывать виджет часов (оставить системные значки)')
@@ -1839,6 +1857,9 @@ class OrbitApp:
         self._popup_notification=None
         self.offline=bool(self.settings.get('offline_mode',False))
         self.paste_on_release=bool(self.settings.get('paste_on_release',False))
+        self.excluded_apps=normalize_exclusions(self.settings.get('excluded_apps',[]))
+        self.private_until=0.0
+        self.paste_queue=PasteQueue()
         self.vault=ClipboardVault()
         self.categories=CategoryModel(self.settings.get('orbit_categories'))
         self.categories.normalize_item_categories(self.vault)
@@ -1864,6 +1885,8 @@ class OrbitApp:
         self.bridge=RemoteBridge()
         self.bridge.set_online(not self.offline)
         self.hotkeys=Hotkeys();self.wheel=ClipboardWheel()
+        self.flow_hotkeys=FlowShortcuts()
+        self.flow_hotkeys.start()
         self.wheel_activation_mode=str(self.settings.get('wheel_activation_mode','wheel'))
         self.wheel.set_activation_mode(self.wheel_activation_mode)
         self.hotkeys.configure(self.vault.items)
@@ -1883,6 +1906,7 @@ class OrbitApp:
         self.drum_style=normalize_drum_style(self.settings.get('drum_style','minimal'))
         self.animate_drum_categories=bool(self.settings.get('animate_drum_categories',True))
         self.bubble=DrumBubble(self) if self.wheel_view=='drum' else ScrollBubble()
+        self.flow_palette=None
         self.history=None;self.chat=None;self.online_window=None;self.preferences=None;self.workspace_window=None;self.sql_explorer=None;self.capture_window=None;self.screenshot_editor=None;self.notification_window=None;self.analytics_window=None
         self.tour_seen=bool(self.settings.get('tour_seen',False))
         raw_unread=self.settings.get('unread_peers',{})
@@ -2166,6 +2190,7 @@ class OrbitApp:
                              wheel_manual_order=self.wheel_queue.manual,wheel_manual_by_category=self.wheel_queue.manual_map,orbit_categories=self.categories.categories,
                              selected_peer=self.selected_peer,peer_cursors=self.peer_cursors,
                              offline_mode=self.offline,paste_on_release=self.paste_on_release,
+                             excluded_apps=self.excluded_apps,
                              hide_clock_windows=self.hide_clock_windows,unread_peers=self.unread_peers,tour_seen=self.tour_seen)
         private_write(SETTINGS_FILE,self.settings)
 
@@ -2174,18 +2199,57 @@ class OrbitApp:
         self.clipboard.setText(str(value));self.add_to_history(str(value),force=True);self.clock.flash()
 
     def on_clipboard(self):
-        if self.paused:return
+        if self.paused or time.monotonic() < self.private_until:return
+        source=foreground_app()
+        if is_excluded(source,self.excluded_apps):return
         try:content=self.clipboard.text()
         except Exception:return
         if content and content != self._last_clip:
-            self._last_clip=content;self.add_to_history(content);self.clock.flash()
-            self.analytics.record('clip_capture',foreground_app())
+            self._last_clip=content;self.vault.add(content,source_app=source);self.clock.flash()
+            if self.history and self.history.isVisible():self.history.refresh()
+            self.analytics.record('clip_capture',source)
             self.analytics.record_text(content)
 
     def add_to_history(self,value,force=False):
         if not value or (self.paused and not force):return
         self.vault.add(value,source_app=foreground_app())
         if self.history and self.history.isVisible():self.history.refresh()
+
+    def set_excluded_apps(self,names):
+        value=[x.strip() for x in names.split(',')] if isinstance(names,str) else names
+        self.excluded_apps=normalize_exclusions(value)
+        self.save_settings()
+        self.toast.pop(f'Приложений в исключениях: {len(self.excluded_apps)}')
+
+    def pause_capture_for(self,minutes):
+        duration=max(0,min(1440,int(minutes)))
+        self.private_until=time.monotonic()+duration*60 if duration else 0.0
+        self.toast.pop(f'Запись буфера приостановлена на {duration} минут' if duration else 'Запись возобновлена')
+
+    def open_palette(self):
+        if self.flow_palette is None:self.flow_palette=CommandPalette(self)
+        self.flow_palette.open_palette()
+
+    def enqueue_item(self,ident):
+        item=self.vault.find(ident)
+        if not item or item.get('encrypted'):return
+        if self.paste_queue.push(item.get('text','')):
+            self.toast.pop(f'В очереди: {len(self.paste_queue)}')
+        else:self.toast.pop('Очередь заполнена или запись пуста')
+
+    def clear_paste_queue(self):
+        self.paste_queue.clear()
+        if self.flow_palette:self.flow_palette.refresh()
+        self.toast.pop('Очередь вставки очищена')
+
+    def paste_next_from_queue(self):
+        value=self.paste_queue.pop()
+        if value is None:
+            self.toast.pop('Очередь вставки пуста')
+            return
+        self.copy_text(value)
+        if self.flow_palette:self.flow_palette.refresh()
+        QTimer.singleShot(190,lambda:self.try_paste())
 
     def open_sql_explorer(self):
         # DB connection lives in its independent UI; no database password in settings.
@@ -2608,6 +2672,11 @@ class OrbitApp:
             if item and item.get('pinned') and not item.get('encrypted'):
                 self.copy_text(item.get('text',''))
                 QTimer.singleShot(300,self.try_paste)
+        for _ in range(8):
+            try:flow=self.flow_hotkeys.events.get_nowait()
+            except queue.Empty:break
+            if flow=='palette':self.open_palette()
+            elif flow=='queue_next':self.paste_next_from_queue()
         for _ in range(16):
             try:what,value=self.wheel.events.get_nowait()
             except queue.Empty:break
@@ -2682,9 +2751,10 @@ class OrbitApp:
         self.qt.removeEventFilter(self.local_wheel_filter)
         self.directory.stop();self.pair_bridge.stop();self.bridge.stop()
         for bridge in self.peer_bridges.values():bridge.stop()
-        self.wheel.stop();self.hotkeys.stop()
+        self.wheel.stop();self.hotkeys.stop();self.flow_hotkeys.stop()
         if self.tray_icon is not None:self.tray_icon.hide()
         if self.chat_status_icon is not None:self.chat_status_icon.hide()
+        self.paste_queue.clear()
         self.save_settings();self.store.close();self.notifications.close();self.analytics.close();self.qt.quit()
 
     def run(self):return self.qt.exec()
