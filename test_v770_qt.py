@@ -49,7 +49,7 @@ class ExperienceQtTests(unittest.TestCase):
             self.assertFalse(widget.busy)
             self.assertFalse(widget.download_button.isEnabled())
             self.assertFalse(widget.install_button.isEnabled())
-            self.assertIsNone(widget.release)
+            self.assertEqual(widget.releases,[])
         finally:
             widget.poller.stop()
             widget.close()
