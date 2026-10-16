@@ -357,7 +357,7 @@ def log_update(event, message, *, old_version=None, new_version=None):
     if event not in allowed:
         raise ValueError("Unknown updater event")
     entry = {"time": round(time.time()), "event": event,
-             "message": str(message).replace("\\r", " ").replace("\\n", " ")[:240]}
+             "message": str(message).replace("\r", " ").replace("\n", " ")[:240]}
     if old_version:
         entry["from_version"] = str(old_version)[:20]
     if new_version:
@@ -370,7 +370,7 @@ def log_update(event, message, *, old_version=None, new_version=None):
     try:
         with tmp.open("w", encoding="utf-8") as stream:
             for row in history:
-                stream.write(json.dumps(row, ensure_ascii=False) + "\\n")
+                stream.write(json.dumps(row, ensure_ascii=False) + "\n")
         os.replace(tmp, LOG_FILE)
     finally:
         if tmp.exists():
