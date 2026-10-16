@@ -41,16 +41,16 @@ class DrumVisualTests(unittest.TestCase):
         if output_dir:Path(output_dir).mkdir(parents=True,exist_ok=True)
 
         def render():
-            self.qt.processEvents()
-            img=QImage(drum.size(),QImage.Format_ARGB32_Premultiplied)
-            img.fill(Qt.transparent)
-            painter=QPainter(img)
-            drum.render(painter)
-            painter.end()
-            return img
+            return drum.render_image()
 
         try:
-            drum.show_neighbors(items,4,"Все записи")
+            # Avoid creating a native floating window on headless macOS CI:
+            # exercise the exact scene painter used by paintEvent instead.
+            drum._entries=list(items)
+            drum._cursor=4.0
+            drum._static_mode=False
+            drum.heading="Все записи"
+            drum.position="5 / 9"
             for shape,(name,(w,h)) in SHAPES.items():
                 for theme in ("midnight","light"):
                     app.palette=palette(theme)
