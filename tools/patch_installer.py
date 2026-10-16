@@ -93,8 +93,18 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--target',help='Папка ORBITclip; по умолчанию — рядом с патчем')
     args=parser.parse_args()
-    candidates=[HERE.parent, HERE.parent.parent]
-    target=Path(args.target).expanduser() if args.target else next((p for p in candidates if version(p)),None)
+    candidates=[
+        HERE.parent/'ORBITclip', HERE.parent,
+        HERE.parent.parent/'ORBITclip', HERE.parent.parent,
+    ]
+    target=Path(args.target).expanduser() if args.target else next(
+        (p for p in candidates if version(p)=='7.5.0'),None)
     if target is None:
-        raise SystemExit('Укажи папку с установленным ORBITclip: python apply_patch.py --target ПУТЬ')
+        try:
+            entered=input('Введите полный путь к папке ORBITclip 7.5.0: ').strip().strip('"')
+        except EOFError:
+            entered=''
+        if not entered:
+            raise SystemExit('Укажи путь: python apply_patch.py --target ПУТЬ')
+        target=Path(entered).expanduser()
     install(target)
