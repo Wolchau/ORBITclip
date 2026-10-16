@@ -29,6 +29,8 @@ API = "https://api.github.com/repos/" + REPO
 MAX_ARCHIVE = 12_000_000
 MAX_UNPACKED = 24_000_000
 STATUS_FILE = Path.home() / ".orbitclip_update_status.json"
+LOG_FILE = Path.home() / ".orbitclip_update_history.jsonl"
+MAX_LOG_EVENTS = 120
 
 
 class UpdateError(RuntimeError):
@@ -69,7 +71,7 @@ def _headers(*, binary=False, token=None):
     return header
 
 
-def _get_bytes(url, binary=False, maximum=MAX_ARCHIVE, token=None):
+def _get_bytes(url, binary=False, maximum=MAX_ARCHIVE, token=None, progress=None):
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != "https" or parts.hostname not in ("api.github.com",
                                                            "github.com",
@@ -78,7 +80,20 @@ def _get_bytes(url, binary=False, maximum=MAX_ARCHIVE, token=None):
     request = urllib.request.Request(url, headers=_headers(binary=binary, token=token))
     try:
         with urllib.request.urlopen(request, timeout=18) as response:
-            data = response.read(maximum + 1)
+            total = int(response.headers.get("Content-Length") or 0)
+            chunks = []
+            downloaded = 0
+            while True:
+                chunk = response.read(min(64*1024,maximum + 1 - downloaded))
+                if not chunk:
+                    break
+                downloaded += len(chunk)
+                if downloaded > maximum:
+                    raise UpdateError("Размер файла превышает допустимый лимит")
+                chunks.append(chunk)
+                if progress:
+                    progress(downloaded, total)
+            data = b"".join(chunks)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise UpdateError("Не удалось связаться с GitHub: " + str(exc)) from exc
     if len(data) > maximum:
@@ -103,13 +118,13 @@ def latest_release(current, token=None):
     }
 
 
-def download_release(release, token=None):
+def download_release(release, token=None, progress=None):
     url = release.get("url")
     if not url:
         raise UpdateError("Для релиза не опубликован патч. Доступна ручная установка.")
     if not url.startswith(API + "/releases/assets/"):
         raise UpdateError("Адрес ZIP не принадлежит официальному релизу")
-    result = _get_bytes(url, binary=True, token=token)
+    result = _get_bytes(url, binary=True, token=token, progress=progress)
     expected = release.get("digest", "")
     if expected.startswith("sha256:") and digest(result) != expected[7:].lower():
         raise UpdateError("Контрольная сумма загруженного архива не совпала")
@@ -329,6 +344,58 @@ def launch_after_exit(stage, target, pid):
     subprocess.Popen(args, **kwargs)
 
 
+def backup_location(target):
+    """No side effects. GUI may open this directory via a file URL."""
+    target = Path(target).resolve()
+    return target / ".orbitclip_patch_backups"
+
+
+def log_update(event, message, *, old_version=None, new_version=None):
+    """Small bounded append-only audit: never include user content or tokens."""
+    allowed = {"check", "download", "validated", "waiting", "backup",
+               "install", "rollback", "success", "failure", "restart"}
+    if event not in allowed:
+        raise ValueError("Unknown updater event")
+    entry = {"time": round(time.time()), "event": event,
+             "message": str(message).replace("\\r", " ").replace("\\n", " ")[:240]}
+    if old_version:
+        entry["from_version"] = str(old_version)[:20]
+    if new_version:
+        entry["to_version"] = str(new_version)[:20]
+    # Do not log URLs, payload contents, filesystem paths, or exception strings
+    # originating from arbitrary network responses.
+    history = read_history(MAX_LOG_EVENTS - 1)
+    history.append(entry)
+    tmp = LOG_FILE.with_name(LOG_FILE.name + ".tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as stream:
+            for row in history:
+                stream.write(json.dumps(row, ensure_ascii=False) + "\\n")
+        os.replace(tmp, LOG_FILE)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def read_history(limit=30):
+    """Read sanitized local update history, newest entries are last."""
+    try:
+        lines = LOG_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    result = []
+    for line in lines[-max(0,min(int(limit),MAX_LOG_EVENTS)):]:
+        try:
+            entry = json.loads(line)
+            if isinstance(entry,dict) and entry.get("event") in {
+                    "check","download","validated","waiting","backup",
+                    "install","rollback","success","failure","restart"}:
+                result.append(entry)
+        except ValueError:
+            continue
+    return result
+
+
 def _write_status(ok, message):
     STATUS_FILE.write_text(json.dumps({"ok": bool(ok), "message": str(message)[:300],
                                         "timestamp": time.time()}, ensure_ascii=False),
@@ -345,13 +412,19 @@ def consume_status():
 
 
 def apply_after_exit(stage, target, pid):
+    data = json.loads((Path(stage) / "manifest.json").read_text("utf-8"))
+    old = str(data.get("from_version", ""))
+    new = str(data.get("to_version", ""))
     try:
+        log_update("waiting", "Ожидание завершения ORBITclip", old_version=old, new_version=new)
         until = time.monotonic() + 35
         while _process_alive(pid) and time.monotonic() < until:
             time.sleep(.20)
         if _process_alive(pid):
             raise UpdateError("ORBITclip не завершился; обновление не применено")
+        log_update("install", "Проверка файлов и установка", old_version=old, new_version=new)
         installed = install_staged(stage, target)
+        log_update("success", "Обновление установлено", old_version=old, new_version=new)
         _write_status(True, "ORBITclip обновлён до " + installed)
         # Start through the shared-runtime launcher; never overwrite venv.
         entry = Path(target) / "launcher.py"
@@ -360,6 +433,9 @@ def apply_after_exit(stage, target, pid):
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=os.name != "nt")
     except Exception as exc:
+        # An unsuccessful transactional install restores changed files.
+        log_update("failure", "Установка остановлена. Проверь журнал ошибок и резервную копию",
+                   old_version=old, new_version=new)
         _write_status(False, str(exc))
         raise
     finally:
