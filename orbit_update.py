@@ -63,7 +63,7 @@ def _headers(*, binary=False, token=None):
     token = token or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if token:
         token = str(token).strip()
-        if "\\r" in token or "\\n" in token:
+        if chr(13) in token or chr(10) in token:
             raise UpdateError("Некорректный токен")
         header["Authorization"] = "Bearer " + token
     return header
