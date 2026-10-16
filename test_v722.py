@@ -40,7 +40,7 @@ class Smart722(unittest.TestCase):
 
 class UX722(unittest.TestCase):
     def test_version(self):
-        self.assertEqual(CLIENT_VERSION,'7.6.3')
+        self.assertEqual(CLIENT_VERSION,'7.7.0')
         self.assertIn('QT_CLIENT_VERSION = CLIENT_VERSION',CORE)
         for phrase in ("'ORBITclip · Библиотека · v'+CLIENT_VERSION", "'ORBITclip · Сообщения · v'+CLIENT_VERSION", "'ORBITclip · Настройки · v'+CLIENT_VERSION"):
             self.assertIn(phrase,CORE)
