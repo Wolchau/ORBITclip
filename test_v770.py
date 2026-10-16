@@ -11,7 +11,7 @@ from orbit_update import (
     stage_archive, install_staged, read_version, digest,
 )
 from orbit_version import CLIENT_VERSION
-from orbit_messenger_ui import validate_dropped_files
+from orbit_messenger_logic import validate_dropped_files
 
 
 class UpdateCoreTests(unittest.TestCase):
