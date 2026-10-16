@@ -87,7 +87,7 @@ def incremental_patch(version):
         status=columns[0][0]
         if status not in ('A','M','D') or len(columns)!=2: continue
         rel=Path(columns[1])
-        if rel.parts[0] in ('.github','tools','docs','patches','dist') or rel.suffix.lower() not in allowed: continue
+        if rel.name.startswith('test_') or rel.parts[0] in ('.github','tools','docs','patches','dist') or rel.suffix.lower() not in allowed: continue
         before=hashlib.sha256(git('show',oldtag+':'+rel.as_posix())).hexdigest() if status!='A' else None
         body=(ROOT/rel).read_bytes() if status!='D' else None
         after=hashlib.sha256(body).hexdigest() if body is not None else None
