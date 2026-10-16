@@ -6,7 +6,6 @@ import unittest
 import json
 from pathlib import Path
 from unittest.mock import Mock
-from PIL import Image,ImageDraw,ImageFont
 from kinetic_clipboard import ClipboardVault
 from kinetic_remote import encrypt_message,decrypt_message
 from orbit_smart import smart_actions
