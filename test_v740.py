@@ -21,7 +21,7 @@ def method(name, cls='OrbitApp'):
 
 class Themes(unittest.TestCase):
     def test_palette_count(self):
-        self.assertEqual(CLIENT_VERSION,'7.5.1')
+        self.assertEqual(CLIENT_VERSION,'7.6.0')
         self.assertGreaterEqual(len(THEMES),5)
         self.assertIn('light', THEMES)
         self.assertEqual(normalize_theme('invalid'),'midnight')
@@ -88,7 +88,7 @@ class AnalyticsTests(unittest.TestCase):
             with self.assertRaises(ValueError):a.record('made-up')
             a.close()
     def test_source_names_only_not_text(self):
-        self.assertIn("self.analytics.record('clip_capture',foreground_app())",SRC)
+        self.assertIn("self.analytics.record('clip_capture',source)",SRC)
         self.assertNotIn('vault.items, self.analytics',SRC)
 
 

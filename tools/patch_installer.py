@@ -97,11 +97,12 @@ if __name__=='__main__':
         HERE.parent/'ORBITclip', HERE.parent,
         HERE.parent.parent/'ORBITclip', HERE.parent.parent,
     ]
+    expected=json.loads((HERE/'manifest.json').read_text('utf-8'))['from_version']
     target=Path(args.target).expanduser() if args.target else next(
-        (p for p in candidates if version(p)=='7.5.0'),None)
+        (p for p in candidates if version(p)==expected),None)
     if target is None:
         try:
-            entered=input('Введите полный путь к папке ORBITclip 7.5.0: ').strip().strip('"')
+            entered=input('Введите полный путь к папке ORBITclip: ').strip().strip('"')
         except EOFError:
             entered=''
         if not entered:

@@ -55,6 +55,9 @@ from orbit_activity_ui import NotificationCenterWindow, AnalyticsWindow
 from orbit_drum import DrumBubble
 from orbit_drum_styles import DRUM_STYLES, normalize_drum_style
 from orbit_select import OrbitSelect
+from orbit_flow import PasteQueue, normalize_exclusions, is_excluded
+from orbit_global_shortcuts import FlowShortcuts
+from orbit_palette import CommandPalette
 
 APP_NAME = 'ORBITclip'
 QT_CLIENT_VERSION = CLIENT_VERSION
@@ -255,6 +258,8 @@ class OrbitPill(QWidget):
         elif e.button()==Qt.RightButton:
             menu=QMenu(self)
             menu.addAction('История буфера',self.app.open_history)
+            menu.addAction('⌕ Быстрый поиск и команды…',self.app.open_palette)
+            menu.addAction('Вставить следующий из очереди',self.app.paste_next_from_queue)
             menu.addAction('Связь и переписка',self.app.open_chat)
             menu.addAction('Устройства онлайн…',self.app.open_online)
             menu.addAction('Общие пространства…',self.app.open_workspaces)
@@ -579,6 +584,8 @@ class VaultRow(QFrame):
             host=root if root is not None else m
             host.addAction(icon(name),caption,callback)
         add('copy','Копировать',lambda:self.window.copy_item(self.item_id))
+        if not item.get('encrypted'):
+            add('history','Добавить в очередь вставки',lambda:self.window.app.enqueue_item(self.item_id))
         add('remote','Отправить устройству…',lambda:self.window.app.send_clip_item(self.item_id))
         if not item.get('encrypted'):
             add('code','Умные действия…',lambda:self.window.smart_item(self.item_id))
@@ -1022,41 +1029,43 @@ class MessageBubble(QFrame):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_message_menu)
         self.setObjectName('chatBubble')
-        shade = '#295047' if own else '#243440'
+        theme=app.palette
+        light=QColor(theme['bg']).lightness()>155
+        shade = (QColor(theme['accent']).lighter(260).name() if light else QColor(theme['accent']).darker(250).name()) if own else theme['raised']
         self.setStyleSheet(
             f'QFrame#chatBubble{{background:{shade};border:1px solid '+
-            ('#39705F' if own else '#344A59')+
-            ';border-radius:12px;} QLabel{border:0;background:transparent;}')
-        self.setMaximumWidth(354)
+            (QColor(theme['accent']).darker(180).name() if own else theme['border'])+
+            ';border-radius:17px;} QLabel{border:0;background:transparent;}')
+        self.setMaximumWidth(475)
         self.setMinimumWidth(140)
         self.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Preferred)
-        inner=QVBoxLayout(self);inner.setContentsMargins(9,5,9,4);inner.setSpacing(1)
+        inner=QVBoxLayout(self);inner.setContentsMargins(14,10,14,8);inner.setSpacing(4)
         if not own and sender:
             who=QLabel(sender)
-            who.setStyleSheet('color:#95C7BF;font-size:10px;font-weight:600;')
+            who.setStyleSheet('color:'+theme['accent']+';font-size:10px;font-weight:600;')
             inner.addWidget(who)
         quoted=content.get('reply_to')
         if isinstance(quoted,dict):
             summary=QLabel(('↳ '+('Вы' if quoted.get('own') else 'Собеседник')+' · '+truncate(str(quoted.get('text','')),95)))
             summary.setWordWrap(True);summary.setTextFormat(Qt.PlainText)
-            summary.setStyleSheet('background:#1D2D37;color:#A7C7D0;border-left:2px solid #8DB5C0;border-radius:4px;padding:5px;font-size:10px;')
+            summary.setStyleSheet(f"background:{theme['surface']};color:{theme['muted']};border-left:2px solid {theme['accent']};border-radius:4px;padding:5px;font-size:10px;")
             inner.addWidget(summary)
         kind=content.get('kind')
         if kind=='file':
             name=str(content.get('name','attachment'))
             line=QHBoxLayout();line.setSpacing(7)
-            file_ico=QLabel('▣');file_ico.setStyleSheet('color:#9CD5C6;font-size:22px;')
+            file_ico=QLabel('▣');file_ico.setStyleSheet('color:'+theme['accent']+';font-size:22px;')
             line.addWidget(file_ico)
             info=QVBoxLayout();info.setSpacing(1)
             filename=QLabel(truncate(name,46))
             filename.setToolTip(name)
-            filename.setStyleSheet('color:#ECF5F5;font-size:12px;font-weight:600;')
+            filename.setStyleSheet('color:'+theme['text']+';font-size:12px;font-weight:600;')
             info.addWidget(filename)
             file_path=Path(saved_path) if saved_path else None
             self.saved_path=file_path
             if file_path and file_path.is_file():
                 sub=QLabel('Сохранено на компьютере')
-                sub.setStyleSheet('color:#9EB7B1;font-size:10px;')
+                sub.setStyleSheet('color:'+theme['muted']+';font-size:10px;')
                 info.addWidget(sub)
                 filename.setToolTip(str(file_path))
             elif own:
@@ -1073,15 +1082,15 @@ class MessageBubble(QFrame):
             excerpt.setTextInteractionFlags(Qt.TextSelectableByMouse)
             excerpt.setTextFormat(Qt.PlainText)
             excerpt.setWordWrap(True)
-            excerpt.setMaximumWidth(326)
-            excerpt.setStyleSheet('font-size:12px;color:#F1F6F7;')
+            excerpt.setMaximumWidth(440)
+            excerpt.setStyleSheet('font-size:13px;color:'+theme['text']+';line-height:1.3;')
             inner.addWidget(excerpt)
         # Keep only the timestamp in the layout. Tools are overlaid on hover,
         # so the bubble never changes height when action buttons appear.
         foot=QHBoxLayout();foot.setContentsMargins(0,0,0,0);foot.setSpacing(0)
         foot.addStretch(1)
         when=QLabel(('✓ ' if own else '')+stamp)
-        when.setStyleSheet('color:#A5BBC0;font-size:9px;')
+        when.setStyleSheet('color:'+theme['muted']+';font-size:9px;')
         foot.addWidget(when)
         inner.addLayout(foot)
         self.hover_actions=QFrame(self)
@@ -1150,9 +1159,33 @@ class MessageBubble(QFrame):
 
 class ChatComposer(QPlainTextEdit):
     """Enter sends; Shift+Enter inserts a newline. Ctrl/Cmd+Enter also sends."""
-    def __init__(self,send_callback,parent=None):
+    def __init__(self,send_callback,parent=None,file_callback=None):
         super().__init__(parent)
         self.send_callback=send_callback
+        self.file_callback=file_callback
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self,event):
+        if self.file_callback and event.mimeData().hasUrls() and any(
+                url.isLocalFile() for url in event.mimeData().urls()):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self,event):
+        if self.file_callback and event.mimeData().hasUrls() and any(
+                url.isLocalFile() for url in event.mimeData().urls()):
+            event.acceptProposedAction()
+        else:super().dragMoveEvent(event)
+
+    def dropEvent(self,event):
+        if self.file_callback and event.mimeData().hasUrls():
+            paths=[url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if paths:
+                self.file_callback(paths)
+                event.acceptProposedAction()
+                return
+        super().dropEvent(event)
 
     def keyPressEvent(self,event):
         if event.key() in (Qt.Key_Return,Qt.Key_Enter):
@@ -1174,14 +1207,40 @@ class ChatWindow(QWidget):
         self.reply_to=None
         self.setWindowTitle('ORBITclip · Сообщения · v'+CLIENT_VERSION)
         self.setWindowIcon(QIcon(str(ASSETS/'orbit_icon.png')))
-        self.resize(1000,710)
-        self.setMinimumSize(720,490)
+        self.resize(1120,760)
+        self.setMinimumSize(790,550)
+        self.setAcceptDrops(True)
         self.build()
 
+    def apply_theme(self):
+        p=self.app.palette
+        self.setStyleSheet(f"""
+            QWidget#messengerShell{{background:{p['bg']};}}
+            QFrame#chatSidebar{{background:{p['surface']};border:1px solid {p['border']};border-radius:16px;}}
+            QFrame#chatHeader{{background:{p['surface']};border:1px solid {p['border']};border-radius:14px;}}
+            QFrame#chatComposer{{background:{p['raised']};border:1px solid {p['border']};border-radius:17px;}}
+            QPlainTextEdit#chatInput{{background:transparent;color:{p['text']};border:0;padding:8px 6px;font-size:13px;}}
+            QListWidget#dialogList{{background:transparent;border:0;outline:0;}}
+            QListWidget#dialogList::item{{border-radius:11px;padding:12px 10px;margin-bottom:4px;
+                                          background:transparent;color:{p['text']};}}
+            QListWidget#dialogList::item:hover{{background:{p['hover']};}}
+            QListWidget#dialogList::item:selected{{background:{p['hover']};color:{p['text']};}}
+        """)
+        if hasattr(self,'msg_scroll'):
+            self.msg_scroll.setStyleSheet(
+                f'QScrollArea#messageScroll{{background:{p["bg"]};border-radius:15px;border:0;}}')
+            self.msg_container.setStyleSheet('background:'+p['bg']+';')
+        if hasattr(self,'avatar'):
+            self.avatar.setStyleSheet(
+                f"background:{p['hover']};color:{p['accent']};border-radius:19px;"
+                "font-size:18px;font-weight:700;")
+
     def build(self):
-        lay=QVBoxLayout(self);lay.setContentsMargins(10,10,10,10);lay.setSpacing(7)
+        self.setObjectName('messengerShell')
+        self.apply_theme()
+        lay=QVBoxLayout(self);lay.setContentsMargins(12,11,12,12);lay.setSpacing(10)
         headline=QHBoxLayout()
-        title=QLabel('ORBITclip');title.setStyleSheet('font-size:19px;font-weight:750;color:#F5B49F;')
+        title=QLabel('ORBITclip');title.setStyleSheet('font-size:20px;font-weight:750;color:#F5B49F;')
         headline.addWidget(title)
         headline.addWidget(label(' / сообщения'))
         headline.addStretch()
@@ -1195,31 +1254,31 @@ class ChatWindow(QWidget):
         lay.addLayout(tabs)
         self.pages=QStackedWidget();lay.addWidget(self.pages,1)
         self.build_chat();self.build_connect()
+        self.apply_theme()
         self.set_page(0 if self.app.remote_config or self.app.identity.trusted else 1)
         self.refresh_peers()
 
     def build_chat(self):
         page=QWidget()
         outer=QHBoxLayout(page);outer.setContentsMargins(0,2,0,0);outer.setSpacing(8)
-        sidebar=QFrame();sidebar.setObjectName('side');sidebar.setFixedWidth(245)
-        left=QVBoxLayout(sidebar);left.setContentsMargins(8,10,8,10);left.setSpacing(8)
-        label_convos=QLabel('ДИАЛОГИ');label_convos.setObjectName('subhead');left.addWidget(label_convos)
+        sidebar=QFrame();sidebar.setObjectName('chatSidebar');sidebar.setFixedWidth(282)
+        left=QVBoxLayout(sidebar);left.setContentsMargins(12,15,12,12);left.setSpacing(10)
+        label_convos=QLabel('Диалоги');label_convos.setStyleSheet('font-weight:700;font-size:15px;');left.addWidget(label_convos)
         self.sidebar_search=QLineEdit()
-        self.sidebar_search.setPlaceholderText('Найти устройство…')
+        self.sidebar_search.setPlaceholderText('⌕  Поиск по диалогам')
         self.sidebar_search.textChanged.connect(self.refresh_dialog_list)
         left.addWidget(self.sidebar_search)
-        self.dialog_list=QListWidget();self.dialog_list.setSpacing(5)
+        self.dialog_list=QListWidget()
+        self.dialog_list.setObjectName('dialogList')
+        self.dialog_list.setSpacing(2)
         self.dialog_list.setWordWrap(True)
-        self.dialog_list.setStyleSheet('QListWidget{background:transparent;border:0;outline:none;}'
-            'QListWidget::item{background:#1A2B37;border-radius:10px;padding:9px 7px;}'
-            'QListWidget::item:selected{background:#34505B;color:#FFF3ED;}')
         self.dialog_list.currentItemChanged.connect(self.choose_dialog)
         left.addWidget(self.dialog_list,1)
         left.addWidget(action('＋  Подключить устройство',lambda:self.set_page(1)))
         outer.addWidget(sidebar)
         right=QVBoxLayout();right.setSpacing(7);right.setContentsMargins(0,0,0,0)
-        bar=QFrame();bar.setObjectName('side')
-        heading=QHBoxLayout(bar);heading.setContentsMargins(12,9,12,9);heading.setSpacing(9)
+        bar=QFrame();bar.setObjectName('chatHeader')
+        heading=QHBoxLayout(bar);heading.setContentsMargins(16,12,16,12);heading.setSpacing(12)
         self.avatar=QLabel('◎');self.avatar.setFixedSize(38,38);self.avatar.setAlignment(Qt.AlignCenter)
         self.avatar.setStyleSheet('background:#354E57;color:#9FE5D0;border-radius:19px;font-size:18px;font-weight:700;')
         heading.addWidget(self.avatar)
@@ -1246,10 +1305,10 @@ class ChatWindow(QWidget):
         right.addLayout(filters)
         self.msg_scroll=QScrollArea();self.msg_scroll.setWidgetResizable(True)
         self.msg_scroll.setObjectName('messageScroll')
-        self.msg_scroll.setStyleSheet('QScrollArea#messageScroll{background:#121E28;border-radius:14px;}')
-        self.msg_container=QWidget();self.msg_container.setStyleSheet('background:#121E28;')
+        self.msg_scroll.setStyleSheet('QScrollArea#messageScroll{background:#14222D;border-radius:15px;border:0;}')
+        self.msg_container=QWidget();self.msg_container.setStyleSheet('background:#14222D;')
         self.msg_layout=QVBoxLayout(self.msg_container)
-        self.msg_layout.setContentsMargins(7,6,7,6);self.msg_layout.setSpacing(2)
+        self.msg_layout.setContentsMargins(18,12,18,12);self.msg_layout.setSpacing(5)
         self.msg_scroll.setWidget(self.msg_container);right.addWidget(self.msg_scroll,1)
         self.reply_bar=QFrame();self.reply_bar.setObjectName('card')
         reply_layout=QHBoxLayout(self.reply_bar);reply_layout.setContentsMargins(10,5,6,5)
@@ -1257,13 +1316,14 @@ class ChatWindow(QWidget):
         reply_layout.addWidget(self.reply_label,1)
         reply_layout.addWidget(tool('close','Отменить ответ',self.cancel_reply))
         self.reply_bar.hide();right.addWidget(self.reply_bar)
-        composer=QFrame();composer.setObjectName('side')
-        compose_row=QHBoxLayout(composer);compose_row.setContentsMargins(8,7,8,7);compose_row.setSpacing(5)
+        composer=QFrame();composer.setObjectName('chatComposer')
+        compose_row=QHBoxLayout(composer);compose_row.setContentsMargins(10,8,10,8);compose_row.setSpacing(8)
         compose_row.addWidget(tool('document','Прикрепить файл (до 3 МБ)',self.send_file))
         compose_row.addWidget(tool('clipboard','Отправить содержимое буфера',self.send_clipboard))
-        self.compose=ChatComposer(self.send_text)
-        self.compose.setPlaceholderText('Сообщение…   Enter — отправить · Shift+Enter — новая строка')
-        self.compose.setFixedHeight(55)
+        self.compose=ChatComposer(self.send_text,file_callback=self.send_files)
+        self.compose.setObjectName('chatInput')
+        self.compose.setPlaceholderText('Написать сообщение…  ·  Перетащи файлы сюда')
+        self.compose.setFixedHeight(58)
         self.compose.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         compose_row.addWidget(self.compose,1)
         compose_row.addWidget(tool('favorite','Эмодзи',self.open_emoji))
@@ -1271,7 +1331,7 @@ class ChatWindow(QWidget):
         self.send_button.setFixedSize(44,43)
         compose_row.addWidget(self.send_button)
         right.addWidget(composer)
-        footer=label('Сквозное шифрование между доверенными устройствами · сообщения доступны, пока оба устройства онлайн')
+        footer=label('🔒 Шифрованный обмен · Перетащи файл в окно переписки · До 3 МБ на файл')
         right.addWidget(footer)
         outer.addLayout(right,1)
         self.pages.addWidget(page)
@@ -1325,6 +1385,7 @@ class ChatWindow(QWidget):
             item=QListWidgetItem(f'{status}  {name}{count}\n     {truncate(snippet,42)}')
             item.setData(Qt.UserRole,peer)
             item.setToolTip(name)
+            item.setSizeHint(QSize(245,66))
             self.dialog_list.addItem(item)
             if peer==currently:self.dialog_list.setCurrentItem(item)
         self.dialog_list.blockSignals(False)
@@ -1336,6 +1397,7 @@ class ChatWindow(QWidget):
         contact=self.app.identity.trusted.get(peer)
         name=(contact or {}).get('name') or ('Старая пара · PIN' if peer=='legacy' else 'Нет выбранного устройства')
         self.peer_name.setText(name)
+        self.avatar.setText(name[:1].upper() if name else '◉')
         peers={p.get('id') for p in self.app.online_devices}
         text='● В сети' if peer in peers else ('○ Ожидаем подключения' if peer else 'Открой подключение, чтобы добавить устройство')
         if self.app.offline:text='○ Режим оффлайн'
@@ -1640,13 +1702,51 @@ class ChatWindow(QWidget):
         self.app.send_to_active({'kind':'text','text':value,'origin':'clipboard'})
 
     def send_file(self):
+        file,_=QFileDialog.getOpenFileName(self,'Отправить файл (до 3 МБ)')
+        if file:self.send_files([file])
+
+    def send_files(self,paths):
         if self.app.offline:return error(self,'В настройках включён режим оффлайн')
-        if not self.app.active_channel()[0]:return error(self,'Выбери подключённое устройство')
-        file,_=QFileDialog.getOpenFileName(self,'Выбери файл (до 3 МБ)')
-        if not file:return
-        raw=Path(file).read_bytes()
-        if len(raw)>MAX_FILE_SIZE:return error(self,'Файл превышает 3 МБ')
-        self.app.send_to_active({'kind':'file','origin':'clipboard','name':Path(file).name,'bytes':base64.b64encode(raw).decode('ascii')})
+        if not self.app.active_channel()[0]:return error(self,'Сначала выбери получателя')
+        sent=0
+        for path in list(paths)[:10]:
+            file=Path(path)
+            try:
+                if not file.is_file():continue
+                size=file.stat().st_size
+                if size>MAX_FILE_SIZE:
+                    error(self,f'«{file.name}»: превышен лимит 3 МБ')
+                    continue
+                raw=file.read_bytes()
+                if len(raw)>MAX_FILE_SIZE:continue
+            except OSError as exc:
+                error(self,f'Не удалось прочитать «{file.name}»: {exc}')
+                continue
+            ok=self.app.send_to_active({
+                'kind':'file','origin':'clipboard','name':file.name,
+                'bytes':base64.b64encode(raw).decode('ascii')})
+            if not ok:break
+            sent+=1
+        if sent:self.app.toast.pop(f'Отправляется файлов: {sent}')
+
+    def dragEnterEvent(self,event):
+        if event.mimeData().hasUrls() and any(u.isLocalFile() for u in event.mimeData().urls()):
+            event.acceptProposedAction()
+        else:super().dragEnterEvent(event)
+
+    def dragMoveEvent(self,event):
+        if event.mimeData().hasUrls() and any(u.isLocalFile() for u in event.mimeData().urls()):
+            event.acceptProposedAction()
+        else:super().dragMoveEvent(event)
+
+    def dropEvent(self,event):
+        if event.mimeData().hasUrls():
+            paths=[u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+            if paths:
+                self.send_files(paths)
+                event.acceptProposedAction()
+                return
+        super().dropEvent(event)
 
 
 
@@ -1796,6 +1896,17 @@ class PreferencesWindow(QWidget):
         self.wheel_view.currentIndexChanged.connect(
             lambda *_:self.drum_motion.setEnabled(self.wheel_view.currentData()=='drum'))
         lay.addWidget(self.drum_motion)
+        lay.addWidget(label('Приватность буфера'))
+        self.exclusions=QLineEdit(', '.join(app.excluded_apps))
+        self.exclusions.setPlaceholderText('Приложения: 1Password, KeePassXC, …')
+        self.exclusions.setToolTip('Точные названия процессов на Windows или приложений на macOS; через запятую')
+        lay.addWidget(self.exclusions)
+        lay.addWidget(action('Сохранить исключения',lambda:app.set_excluded_apps(self.exclusions.text())))
+        row_private=QHBoxLayout()
+        for minutes in (5,15,60):
+            row_private.addWidget(action(f'Пауза {minutes} мин',lambda checked=False,n=minutes:app.pause_capture_for(n)))
+        lay.addLayout(row_private)
+        lay.addWidget(action('Снять временную паузу',lambda:app.pause_capture_for(0)))
         self.hide_clock=None
         if platform.system() in ('Windows','Darwin'):
             self.hide_clock=QCheckBox('Скрывать виджет часов (оставить системные значки)')
@@ -1819,7 +1930,9 @@ class PreferencesWindow(QWidget):
         self.refresh_status()
 
     def refresh_status(self):
-        self.status.setText('Сеть отключена' if self.app.offline else 'Сеть включена')
+        network='Сеть отключена' if self.app.offline else 'Сеть включена'
+        remaining=max(0,round((self.app.private_until-time.monotonic())/60))
+        self.status.setText(network+(f' · Буфер на паузе ~{remaining} мин' if remaining else ''))
 
 class OrbitApp:
     def __init__(self):
@@ -1839,6 +1952,9 @@ class OrbitApp:
         self._popup_notification=None
         self.offline=bool(self.settings.get('offline_mode',False))
         self.paste_on_release=bool(self.settings.get('paste_on_release',False))
+        self.excluded_apps=normalize_exclusions(self.settings.get('excluded_apps',[]))
+        self.private_until=0.0
+        self.paste_queue=PasteQueue()
         self.vault=ClipboardVault()
         self.categories=CategoryModel(self.settings.get('orbit_categories'))
         self.categories.normalize_item_categories(self.vault)
@@ -1864,6 +1980,8 @@ class OrbitApp:
         self.bridge=RemoteBridge()
         self.bridge.set_online(not self.offline)
         self.hotkeys=Hotkeys();self.wheel=ClipboardWheel()
+        self.flow_hotkeys=FlowShortcuts()
+        self.flow_hotkeys.start()
         self.wheel_activation_mode=str(self.settings.get('wheel_activation_mode','wheel'))
         self.wheel.set_activation_mode(self.wheel_activation_mode)
         self.hotkeys.configure(self.vault.items)
@@ -1883,6 +2001,7 @@ class OrbitApp:
         self.drum_style=normalize_drum_style(self.settings.get('drum_style','minimal'))
         self.animate_drum_categories=bool(self.settings.get('animate_drum_categories',True))
         self.bubble=DrumBubble(self) if self.wheel_view=='drum' else ScrollBubble()
+        self.flow_palette=None
         self.history=None;self.chat=None;self.online_window=None;self.preferences=None;self.workspace_window=None;self.sql_explorer=None;self.capture_window=None;self.screenshot_editor=None;self.notification_window=None;self.analytics_window=None
         self.tour_seen=bool(self.settings.get('tour_seen',False))
         raw_unread=self.settings.get('unread_peers',{})
@@ -1962,6 +2081,10 @@ class OrbitApp:
         for widget in self.qt.allWidgets():
             if isinstance(widget,OrbitSelect):widget.set_theme(value)
         if isinstance(self.bubble,DrumBubble):self.bubble.update()
+        if self.chat:
+            self.chat.apply_theme()
+            if self.chat.isVisible() and self.chat.pages.currentIndex()==0:
+                self.chat.refresh_messages()
         self.settings['appearance_theme']=value
         self.save_settings()
         self.clock.update()
@@ -1977,6 +2100,8 @@ class OrbitApp:
         history.setToolTip('ORBITclip · Буфер обмена')
         hm=QMenu()
         hm.addAction('Открыть историю',lambda checked=False:self.open_history())
+        hm.addAction('⌕ Быстрый поиск',lambda checked=False:self.open_palette())
+        hm.addAction('Вставить следующий',lambda checked=False:self.paste_next_from_queue())
         hm.addAction('Пространства',lambda checked=False:self.open_workspaces())
         hm.addAction('Уведомления',lambda checked=False:self.open_notification_center())
         hm.addAction('Моя аналитика',lambda checked=False:self.open_analytics())
@@ -2053,6 +2178,7 @@ class OrbitApp:
 
     def open_settings(self):
         if self.preferences is None:self.preferences=PreferencesWindow(self)
+        self.preferences.exclusions.setText(', '.join(self.excluded_apps))
         self.preferences.offline.blockSignals(True)
         self.preferences.paste.blockSignals(True)
         self.preferences.offline.setChecked(self.offline)
@@ -2078,6 +2204,8 @@ class OrbitApp:
         tray.setToolTip('ORBITclip · История и обмен')
         menu=QMenu()
         menu.addAction('История буфера',lambda checked=False:self.open_history())
+        menu.addAction('⌕ Быстрый поиск',lambda checked=False:self.open_palette())
+        menu.addAction('Вставить следующий',lambda checked=False:self.paste_next_from_queue())
         menu.addAction('Переписка',lambda checked=False:self.open_chat())
         menu.addAction('Устройства онлайн',lambda checked=False:self.open_online())
         menu.addAction('Общие пространства',lambda checked=False:self.open_workspaces())
@@ -2166,6 +2294,7 @@ class OrbitApp:
                              wheel_manual_order=self.wheel_queue.manual,wheel_manual_by_category=self.wheel_queue.manual_map,orbit_categories=self.categories.categories,
                              selected_peer=self.selected_peer,peer_cursors=self.peer_cursors,
                              offline_mode=self.offline,paste_on_release=self.paste_on_release,
+                             excluded_apps=self.excluded_apps,
                              hide_clock_windows=self.hide_clock_windows,unread_peers=self.unread_peers,tour_seen=self.tour_seen)
         private_write(SETTINGS_FILE,self.settings)
 
@@ -2174,18 +2303,58 @@ class OrbitApp:
         self.clipboard.setText(str(value));self.add_to_history(str(value),force=True);self.clock.flash()
 
     def on_clipboard(self):
-        if self.paused:return
+        if self.paused or time.monotonic() < self.private_until:return
+        source=foreground_app()
+        if is_excluded(source,self.excluded_apps):return
         try:content=self.clipboard.text()
         except Exception:return
         if content and content != self._last_clip:
-            self._last_clip=content;self.add_to_history(content);self.clock.flash()
-            self.analytics.record('clip_capture',foreground_app())
+            self._last_clip=content;self.vault.add(content,source_app=source);self.clock.flash()
+            if self.history and self.history.isVisible():self.history.refresh()
+            self.analytics.record('clip_capture',source)
             self.analytics.record_text(content)
 
     def add_to_history(self,value,force=False):
         if not value or (self.paused and not force):return
         self.vault.add(value,source_app=foreground_app())
         if self.history and self.history.isVisible():self.history.refresh()
+
+    def set_excluded_apps(self,names):
+        value=[x.strip() for x in names.split(',')] if isinstance(names,str) else names
+        self.excluded_apps=normalize_exclusions(value)
+        self.save_settings()
+        self.toast.pop(f'Приложений в исключениях: {len(self.excluded_apps)}')
+
+    def pause_capture_for(self,minutes):
+        duration=max(0,min(1440,int(minutes)))
+        self.private_until=time.monotonic()+duration*60 if duration else 0.0
+        self.toast.pop(f'Запись буфера приостановлена на {duration} минут' if duration else 'Запись возобновлена')
+        if self.preferences:self.preferences.refresh_status()
+
+    def open_palette(self):
+        if self.flow_palette is None:self.flow_palette=CommandPalette(self)
+        self.flow_palette.open_palette()
+
+    def enqueue_item(self,ident):
+        item=self.vault.find(ident)
+        if not item or item.get('encrypted'):return
+        if self.paste_queue.push(item.get('text','')):
+            self.toast.pop(f'В очереди: {len(self.paste_queue)}')
+        else:self.toast.pop('Очередь заполнена или запись пуста')
+
+    def clear_paste_queue(self):
+        self.paste_queue.clear()
+        if self.flow_palette:self.flow_palette.refresh()
+        self.toast.pop('Очередь вставки очищена')
+
+    def paste_next_from_queue(self):
+        value=self.paste_queue.pop()
+        if value is None:
+            self.toast.pop('Очередь вставки пуста')
+            return
+        self.copy_text(value)
+        if self.flow_palette:self.flow_palette.refresh()
+        QTimer.singleShot(190,lambda:self.try_paste())
 
     def open_sql_explorer(self):
         # DB connection lives in its independent UI; no database password in settings.
@@ -2608,6 +2777,11 @@ class OrbitApp:
             if item and item.get('pinned') and not item.get('encrypted'):
                 self.copy_text(item.get('text',''))
                 QTimer.singleShot(300,self.try_paste)
+        for _ in range(8):
+            try:flow=self.flow_hotkeys.events.get_nowait()
+            except queue.Empty:break
+            if flow=='palette':self.open_palette()
+            elif flow=='queue_next':self.paste_next_from_queue()
         for _ in range(16):
             try:what,value=self.wheel.events.get_nowait()
             except queue.Empty:break
@@ -2682,9 +2856,10 @@ class OrbitApp:
         self.qt.removeEventFilter(self.local_wheel_filter)
         self.directory.stop();self.pair_bridge.stop();self.bridge.stop()
         for bridge in self.peer_bridges.values():bridge.stop()
-        self.wheel.stop();self.hotkeys.stop()
+        self.wheel.stop();self.hotkeys.stop();self.flow_hotkeys.stop()
         if self.tray_icon is not None:self.tray_icon.hide()
         if self.chat_status_icon is not None:self.chat_status_icon.hide()
+        self.paste_queue.clear()
         self.save_settings();self.store.close();self.notifications.close();self.analytics.close();self.qt.quit()
 
     def run(self):return self.qt.exec()
