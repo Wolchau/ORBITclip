@@ -20,10 +20,7 @@ class CommandPalette(QWidget):
         self.setMinimumSize(530, 420)
         self.resize(610, 480)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
-        self.setStyleSheet('QWidget#flowPalette{border:1px solid #526677;border-radius:15px;background:#17232E;}'
-                           'QListWidget{border:0;background:transparent;outline:none;}'
-                           'QListWidget::item{padding:10px 12px;border-radius:8px;}'
-                           'QListWidget::item:selected{background:#34505B;}')
+        self.apply_theme()
         layout=QVBoxLayout(self);layout.setContentsMargins(16,14,16,15);layout.setSpacing(9)
         header=QHBoxLayout()
         title=QLabel('⌕  Найти и использовать');title.setStyleSheet('font-size:16px;font-weight:700;')
@@ -53,7 +50,17 @@ class CommandPalette(QWidget):
         QShortcut(QKeySequence('Ctrl+Return'),self,activated=self.paste_selected)
         QShortcut(QKeySequence('Escape'),self,activated=self.hide)
 
+    def apply_theme(self):
+        p=palette(getattr(self.app,'appearance_theme','midnight'))
+        self.setStyleSheet(f"""
+            QWidget#flowPalette{{background:{p['surface']};border:1px solid {p['border']};border-radius:15px;}}
+            QListWidget{{background:transparent;color:{p['text']};border:0;outline:0;}}
+            QListWidget::item{{padding:10px 12px;border-radius:8px;}}
+            QListWidget::item:selected{{color:{p['text']};background:{p['hover']};}}
+        """)
+
     def open_palette(self):
+        self.apply_theme()
         self.refresh()
         screen=QApplication.screenAt(self.app.clock.frameGeometry().center()) or QApplication.primaryScreen()
         if screen:
