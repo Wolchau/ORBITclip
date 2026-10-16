@@ -15,16 +15,17 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PySide6.QtGui import QDesktopServices
 
 from orbit_version import CLIENT_VERSION
-from orbit_update import (UpdateError, latest_release, download_release,
-                          stage_archive, launch_after_exit, backup_location,
-                          log_update, read_history)
+from orbit_update import (UpdateError, stage_archive, launch_after_exit,
+                          backup_location, log_update, read_history, version_tuple)
+from orbit_update_chain import (list_releases, download_and_prepare,
+                                launch_chain_after_exit)
 
 
 class UpdateWindow(QWidget):
     def __init__(self, app):
         super().__init__(None, Qt.Window)
         self.app=app
-        self.release=None
+        self.releases=[]
         self.prepared=None
         self.events=queue.Queue()
         self.busy=False
@@ -106,27 +107,23 @@ class UpdateWindow(QWidget):
         threading.Thread(target=run,daemon=True,name='orbit-update-check').start()
 
     def check_updates(self):
-        self.release=None
+        self.releases=[]
         self.prepared=None
         token=self.auth.text().strip()
-        self._start(lambda:('release',latest_release(CLIENT_VERSION, token=token)))
+        self._start(lambda:('releases',list_releases(CLIENT_VERSION,token=token)))
 
     def fetch_update(self):
-        if not self.release:
+        if not self.releases:
             return
         token=self.auth.text().strip()
-        self._start(self._download_job,self.release,token)
+        self._start(self._download_job,list(self.releases),token)
 
-    def _download_job(self, release,token):
-        archive=download_release(
-            release, token=token,
-            progress=lambda done,total:self.events.put(('progress',(done,total))))
-        try:
-            result=stage_archive(archive,self.app_root)
-            return ('prepared',result)
-        finally:
-            try:archive.unlink(missing_ok=True)
-            except OSError:pass
+    def _download_job(self,releases,token):
+        def progress(index,count,done,total):
+            self.events.put(('chain_progress',(index,count,done,total)))
+        plan,manifests=download_and_prepare(releases,self.app_root,token=token,
+                                           progress=progress)
+        return ('prepared_chain',(plan,manifests))
 
     @property
     def app_root(self):
@@ -135,7 +132,7 @@ class UpdateWindow(QWidget):
     def local_archive(self):
         path,_=QFileDialog.getOpenFileName(self,'Открыть патч ORBITclip','','ZIP (*.zip)')
         if path:
-            self.release=None
+            self.releases=[]
             self._start(lambda:('prepared',stage_archive(Path(path),self.app_root)))
 
     def _poll(self):
@@ -143,14 +140,13 @@ class UpdateWindow(QWidget):
             kind,value=self.events.get_nowait()
         except queue.Empty:
             return
-        if kind=='progress':
-            done,total=value
-            if total>0:
+        if kind=='chain_progress':
+            index,count,done,total=value
+            if count>0:
+                portion=done/total if total>0 else 0
                 self.progress.setRange(0,100)
-                self.progress.setValue(min(100,done*100//total))
-                self.progress.setFormat('%p% · загружено')
-            else:
-                self.progress.setRange(0,0)
+                self.progress.setValue(min(100,round((index+portion)*100/count)))
+                self.progress.setFormat(f'Загрузка {min(index+1,count)} / {count} · %p%')
             return
         self.busy=False
         self.check_button.setEnabled(True)
@@ -166,28 +162,40 @@ class UpdateWindow(QWidget):
         self.progress.setValue(100)
         self.progress.setFormat('Готово')
         result, payload=value
-        if result=='release':
-            self.release=payload
+        if result=='releases':
+            self.releases=payload
             if not payload:
                 self.status.setText('Установлена последняя доступная версия.')
                 log_update('check','Новых версий не найдено')
-            elif not payload.get('url'):
-                self.status.setText(f"Доступна {payload['version']}, но GitHub не содержит "
-                                    "ZIP-патча. Открой страницу релиза и выбери ручную установку.")
             else:
-                self.status.setText(f"Доступна {payload['version']}. Размер патча: "
-                                    f"{payload['size']//1024} КБ. "
-                                    "При несовместимости версий проверка остановит установку.")
+                target=max(payload,key=lambda release:version_tuple(release['version']))['version']
+                self.status.setText(
+                    f"Доступна {target}. Найдено {len(payload)} более новых релизов. "
+                    "Приложение самостоятельно найдёт цепочку совместимых патчей, "
+                    "скачает их и проверит на временной копии до установки.")
                 self.download_button.setEnabled(True)
-                log_update('check','Доступен релиз '+payload['version'])
+                log_update('check','Доступен релиз '+target)
+        elif result=='prepared_chain':
+            plan,manifests=payload
+            self.prepared=('chain',plan,manifests)
+            target=manifests[-1]['to_version']
+            self.info.setText(f"Установлена {CLIENT_VERSION} → подготовлена {target}")
+            route=' → '.join([manifests[0]['from_version']]+[
+                manifest['to_version'] for manifest in manifests])
+            self.status.setText(f'Проверено {len(manifests)} патчей: {route}. '
+                                'После выхода установка выполнится одной транзакцией '
+                                'с откатом всей цепочки при ошибке.')
+            self.install_button.setEnabled(True)
+            log_update('validated',f'Полная цепочка проверена: {len(manifests)} этапов',
+                       old_version=manifests[0]['from_version'],new_version=target)
         elif result=='prepared':
             stage,manifest=payload
-            self.prepared=(stage,manifest)
+            self.prepared=('single',stage,[manifest])
             self.info.setText(f"Установлена {CLIENT_VERSION} → подготовлена {manifest['to_version']}")
-            self.status.setText('Патч проверен: версия, все исходные файлы и содержимое ZIP. '
+            self.status.setText('Один патч проверен: версии, исходные файлы и ZIP. '
                                 'Установка начнётся только после закрытия приложения.')
             self.install_button.setEnabled(True)
-            log_update('validated','Патч проверен',old_version=manifest['from_version'],
+            log_update('validated','Один патч проверен',old_version=manifest['from_version'],
                        new_version=manifest['to_version'])
         self.refresh_history()
 
@@ -213,15 +221,21 @@ class UpdateWindow(QWidget):
 
     def apply_update(self):
         if not self.prepared:return
-        stage,manifest=self.prepared
-        text=(f"Обновить ORBITclip {CLIENT_VERSION} → {manifest['to_version']}?\n\n"
+        mode,stage,manifests=self.prepared
+        manifest={'from_version':manifests[0]['from_version'],
+                  'to_version':manifests[-1]['to_version']}
+        text=(f"Обновить ORBITclip {CLIENT_VERSION} → {manifest['to_version']} "
+              f"({len(manifests)} патчей)?\n\n"
               "Все окна закроются. После успешной установки программа "
               "автоматически запустится. При ошибке исходные файлы восстанавливаются.")
         if QMessageBox.question(self,'Подтвердить установку',text,
                                 QMessageBox.Yes|QMessageBox.No)!=QMessageBox.Yes:return
         try:
             import os
-            launch_after_exit(stage,self.app_root,os.getpid())
+            if mode=='chain':
+                launch_chain_after_exit(stage,self.app_root,os.getpid())
+            else:
+                launch_after_exit(stage,self.app_root,os.getpid())
         except (OSError,UpdateError) as exc:
             QMessageBox.critical(self,'Обновление не запущено',str(exc))
             return
