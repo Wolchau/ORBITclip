@@ -53,7 +53,7 @@ def prepare_previous(folder, ref):
 
 def command(installer,folder,*args,should_pass=True):
     result=subprocess.run([sys.executable,str(installer),'--target',str(folder),*args],
-                          text=True,capture_output=True)
+                          text=True,encoding='utf-8',errors='replace',capture_output=True)
     if (result.returncode==0)!=should_pass:
         raise AssertionError(
             f'Installer returned {result.returncode}; stdout={result.stdout}; '
