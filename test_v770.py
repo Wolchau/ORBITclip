@@ -4,6 +4,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+import os
 from zipfile import ZipFile
 
 from orbit_update import (
@@ -60,6 +62,26 @@ class UpdateCoreTests(unittest.TestCase):
             self.assertEqual((app/'client_defaults.json').read_text(),'private user config')
             backup=app/'.orbitclip_patch_backups'/'v7.6.3_to_v7.7.0'
             self.assertTrue((backup/'orbit_version.py').is_file())
+
+    def test_install_rollback_when_replace_raises_after_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app,archive=self._make(Path(tmp))
+            stage,_=stage_archive(archive,app)
+            original=(app/'orbit_version.py').read_bytes()
+            import orbit_update
+            actual=orbit_update.os.replace
+            called=[False]
+            def interrupted(source,dest):
+                actual(source,dest)
+                if not called[0]:
+                    called[0]=True
+                    raise OSError("simulated crash after atomic replacement")
+            with patch('orbit_update.os.replace',side_effect=interrupted):
+                with self.assertRaises(OSError):
+                    install_staged(stage,app)
+            self.assertTrue(called[0])
+            self.assertEqual(read_version(app),'7.6.3')
+            self.assertEqual((app/'orbit_version.py').read_bytes(),original)
 
     def test_wrong_hash_rejected_before_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
