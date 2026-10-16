@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install test dependencies
-        run: python -m pip install "cryptography>=42,<47" "Pillow>=10,<13" "certifi>=2024.2.2" "sqlparse>=0.5,<1" "pytesseract>=0.3.10,<1"
+        run: python -m pip install "cryptography>=42,<47" "certifi>=2024.2.2" "sqlparse>=0.5,<1"
       - name: Verify source and regression tests
         run: |
           python -m compileall -q .
