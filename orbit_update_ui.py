@@ -6,14 +6,18 @@ thread; downloaded ZIPs are validated by the stdlib updater before restart.
 import queue
 import threading
 from pathlib import Path
+from datetime import datetime
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, QUrl
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                              QPushButton, QFileDialog, QMessageBox, QLineEdit)
+                              QPushButton, QFileDialog, QMessageBox, QLineEdit,
+                              QProgressBar, QPlainTextEdit)
+from PySide6.QtGui import QDesktopServices
 
 from orbit_version import CLIENT_VERSION
 from orbit_update import (UpdateError, latest_release, download_release,
-                          stage_archive, launch_after_exit)
+                          stage_archive, launch_after_exit, backup_location,
+                          log_update, read_history)
 
 
 class UpdateWindow(QWidget):
@@ -25,7 +29,7 @@ class UpdateWindow(QWidget):
         self.events=queue.Queue()
         self.busy=False
         self.setWindowTitle('ORBITclip · Обновления')
-        self.resize(530, 365)
+        self.resize(550, 565)
         self.setMinimumWidth(470)
         lay=QVBoxLayout(self);lay.setContentsMargins(23,23,23,20);lay.setSpacing(13)
         title=QLabel('Обновления ORBITclip')
@@ -35,8 +39,13 @@ class UpdateWindow(QWidget):
         lay.addWidget(self.info)
         self.status=QLabel('Нажми «Проверить», чтобы узнать о новой версии на GitHub.')
         self.status.setWordWrap(True)
-        self.status.setMinimumHeight(55)
+        self.status.setMinimumHeight(42)
         lay.addWidget(self.status)
+        self.progress=QProgressBar()
+        self.progress.setRange(0,100)
+        self.progress.setValue(0)
+        self.progress.setFormat('Ожидание')
+        lay.addWidget(self.progress)
         warn=QLabel('Проверка запускается только по запросу. При недоступном приватном '
                     'репозитории можно выбрать скачанный ZIP вручную.')
         warn.setWordWrap(True)
@@ -65,6 +74,18 @@ class UpdateWindow(QWidget):
         self.install_button.setEnabled(False)
         row2.addWidget(self.install_button)
         lay.addLayout(row2)
+        controls=QHBoxLayout()
+        controls.addWidget(QLabel('История обновлений'))
+        controls.addStretch()
+        backups=QPushButton('Открыть резервные копии')
+        backups.clicked.connect(self.open_backups)
+        controls.addWidget(backups)
+        lay.addLayout(controls)
+        self.history=QPlainTextEdit()
+        self.history.setReadOnly(True)
+        self.history.setFixedHeight(115)
+        lay.addWidget(self.history)
+        self.refresh_history()
         self.poller=QTimer(self);self.poller.timeout.connect(self._poll);self.poller.start(110)
 
     def _start(self, fn, *args):
@@ -75,6 +96,7 @@ class UpdateWindow(QWidget):
         self.download_button.setEnabled(False)
         self.install_button.setEnabled(False)
         self.status.setText('Проверяем…')
+        self.progress.setRange(0,0) # Busy, not a fabricated percentage
         def run():
             try:
                 result=fn(*args)
@@ -86,20 +108,19 @@ class UpdateWindow(QWidget):
     def check_updates(self):
         self.release=None
         self.prepared=None
-        self._check_token=self.auth.text().strip()
-        self._start(self._check_job)
-
-    def _check_job(self):
-        return ('release',latest_release(CLIENT_VERSION, token=self._check_token))
+        token=self.auth.text().strip()
+        self._start(lambda:('release',latest_release(CLIENT_VERSION, token=token)))
 
     def fetch_update(self):
         if not self.release:
             return
-        self._check_token=self.auth.text().strip()
-        self._start(self._download_job,self.release)
+        token=self.auth.text().strip()
+        self._start(self._download_job,self.release,token)
 
-    def _download_job(self, release):
-        archive=download_release(release,token=self._check_token)
+    def _download_job(self, release,token):
+        archive=download_release(
+            release, token=token,
+            progress=lambda done,total:self.events.put(('progress',(done,total))))
         try:
             result=stage_archive(archive,self.app_root)
             return ('prepared',result)
@@ -122,16 +143,34 @@ class UpdateWindow(QWidget):
             kind,value=self.events.get_nowait()
         except queue.Empty:
             return
+        if kind=='progress':
+            done,total=value
+            if total>0:
+                self.progress.setRange(0,100)
+                self.progress.setValue(min(100,done*100//total))
+                self.progress.setFormat('%p% · загружено')
+            else:
+                self.progress.setRange(0,0)
+            return
         self.busy=False
         self.check_button.setEnabled(True)
         if kind=='error':
+            self.progress.setRange(0,100)
+            self.progress.setValue(0)
+            self.progress.setFormat('Ошибка')
             self.status.setText('Не удалось подготовить обновление.\n'+str(value)[:500])
+            log_update('failure','Не удалось проверить или подготовить патч')
+            self.refresh_history()
             return
+        self.progress.setRange(0,100)
+        self.progress.setValue(100)
+        self.progress.setFormat('Готово')
         result, payload=value
         if result=='release':
             self.release=payload
             if not payload:
                 self.status.setText('Установлена последняя доступная версия.')
+                log_update('check','Новых версий не найдено')
             elif not payload.get('url'):
                 self.status.setText(f"Доступна {payload['version']}, но GitHub не содержит "
                                     "ZIP-патча. Открой страницу релиза и выбери ручную установку.")
@@ -140,6 +179,7 @@ class UpdateWindow(QWidget):
                                     f"{payload['size']//1024} КБ. "
                                     "При несовместимости версий проверка остановит установку.")
                 self.download_button.setEnabled(True)
+                log_update('check','Доступен релиз '+payload['version'])
         elif result=='prepared':
             stage,manifest=payload
             self.prepared=(stage,manifest)
@@ -147,6 +187,29 @@ class UpdateWindow(QWidget):
             self.status.setText('Патч проверен: версия, все исходные файлы и содержимое ZIP. '
                                 'Установка начнётся только после закрытия приложения.')
             self.install_button.setEnabled(True)
+            log_update('validated','Патч проверен',old_version=manifest['from_version'],
+                       new_version=manifest['to_version'])
+        self.refresh_history()
+
+    def refresh_history(self):
+        lines=[]
+        for event in reversed(read_history(20)):
+            timestamp=datetime.fromtimestamp(event['time']).strftime('%d.%m %H:%M')
+            description=event.get('message','')
+            versions=(' '+event.get('from_version','')+' → '+event.get('to_version','')
+                      if event.get('to_version') else '')
+            lines.append(f'{timestamp}  {description}{versions}')
+        self.history.setPlainText('\n'.join(lines) if lines else 'Пока нет операций обновления')
+
+    def open_backups(self):
+        folder=backup_location(self.app_root)
+        if not folder.is_dir():
+            QMessageBox.information(self,'Резервные копии',
+                'Резервных копий пока нет. Они появятся после первого обновления.')
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+            QMessageBox.warning(self,'Резервные копии',
+                'Не удалось открыть каталог: '+str(folder))
 
     def apply_update(self):
         if not self.prepared:return
@@ -162,6 +225,12 @@ class UpdateWindow(QWidget):
         except (OSError,UpdateError) as exc:
             QMessageBox.critical(self,'Обновление не запущено',str(exc))
             return
-        self.status.setText('Перезапуск для установки…')
+        self.status.setText('Закрываем приложение. Дальнейшая установка и откат '
+                            'выполнятся отдельно; результат появится при следующем запуске.')
+        self.progress.setRange(0,0)
+        log_update('waiting','Установка подтверждена; завершение приложения',
+                   old_version=manifest['from_version'],
+                   new_version=manifest['to_version'])
+        self.refresh_history()
         self.install_button.setEnabled(False)
         QTimer.singleShot(160,self.app.shutdown)
