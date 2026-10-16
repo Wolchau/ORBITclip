@@ -108,7 +108,7 @@ def shortest_path(start, destination, available):
                 by_source.get(version,[]),key=lambda x:version_tuple(x[0]),reverse=True):
             if next_version not in visited:
                 visited.add(next_version)
-                frontier.append((next_version,manifest,archive))
+                frontier.append((next_version,route+[(next_version,manifest,archive)]))
     raise UpdateError(f'От {start} до {destination} нет полной цепочки патчей. '
                       'Используй полную установку с сохранением пользовательских данных.')
 
