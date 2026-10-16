@@ -74,6 +74,24 @@ def bundle(version):
                 if p.suffix.lower() not in ('.png','.svg','.ico','.icns','.gif','.jpg','.jpeg','.webp'):
                     continue
                 add_zip_member(z,p,str(Path('ORBITclip')/p.relative_to(ROOT)))
+    # The complete archive is the future one-hop update payload. Its manifest
+    # describes ONLY managed program files, never client_defaults.json.
+    packaged = {}
+    with ZipFile(out,'r') as z:
+        for info in z.infolist():
+            name=info.filename
+            if not name.startswith('ORBITclip/'):
+                continue
+            relative=Path(name).relative_to('ORBITclip')
+            if not patchable_path(relative):
+                continue
+            payload=z.read(name)
+            packaged[relative.as_posix()]={'sha256':hashlib.sha256(payload).hexdigest(),
+                                           'size':len(payload)}
+    manifest={'schema':1,'app':'ORBITclip','version':version,'files':packaged}
+    with ZipFile(out,'a',compression=ZIP_DEFLATED,compresslevel=9) as z:
+        z.writestr('ORBITclip/update-manifest.json',
+                   json.dumps(manifest,ensure_ascii=False,sort_keys=True,indent=2)+'\\n')
     print(out.name,out.stat().st_size,'bytes,',len(root_files),'root files')
 
 # Exactly the files shipped by bundle(), less machine-specific configuration.
@@ -147,5 +165,5 @@ if __name__=='__main__':
     print('Checked version',v,'test credential policy')
     if not args.check_only:
         bundle(v)
-        if v=='7.8.1':
+        if v=='7.8.2':
             incremental_patch(v)
