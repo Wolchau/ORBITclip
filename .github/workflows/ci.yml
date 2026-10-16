@@ -29,22 +29,22 @@ jobs:
           python - <<'PY'
           import json, zipfile
           from pathlib import Path
-          path=Path('dist/ORBITclip_Patch_v7_8_0.zip')
+          path=Path('dist/ORBITclip_Patch_v7_8_1.zip')
           assert path.is_file(), 'Patch archive missing'
           assert path.stat().st_size < 400_000, 'Patch is unexpectedly large'
           with zipfile.ZipFile(path) as z:
               names=z.namelist()
-              manifest=json.loads(z.read('ORBITclip_Patch_v7_8_0/manifest.json'))
-              assert manifest['from_version']=='7.7.1'
-              assert manifest['to_version']=='7.8.0'
-              assert any(x['path']=='orbit_flow.py' for x in manifest['changes'])
+              manifest=json.loads(z.read('ORBITclip_Patch_v7_8_1/manifest.json'))
+              assert manifest['from_version']=='7.8.0'
+              assert manifest['to_version']=='7.8.1'
+              assert any(x['path']=='orbit_update_chain.py' for x in manifest['changes'])
               assert all('.venv' not in x and '/test_' not in x for x in names)
           assert all(x['path']!='README.md' for x in manifest['changes'])
           assert all(x['path']!='client_defaults.json' for x in manifest['changes'])
           print(path.name, path.stat().st_size, 'bytes')
           PY
       - name: Install real ZIP on previous version, reject tampering and exercise rollback
-        run: python tools/verify_release_upgrade.py dist/ORBITclip_Patch_v7_8_0.zip
+        run: python tools/verify_release_upgrade.py dist/ORBITclip_Patch_v7_8_1.zip
 
   qt-drum:
     name: Real Qt offscreen drum render
@@ -83,7 +83,7 @@ jobs:
       - name: Build and install true patch on previous version
         run: |
           python tools/release_builder.py
-          python tools/verify_release_upgrade.py dist/ORBITclip_Patch_v7_8_0.zip
+          python tools/verify_release_upgrade.py dist/ORBITclip_Patch_v7_8_1.zip
       - name: Cross-platform visual QImage rendering (no native popup)
         run: python -m unittest -v test_v763_visual_qt test_v770_qt test_v780_qt
       - name: Preserve drum screenshots for review
