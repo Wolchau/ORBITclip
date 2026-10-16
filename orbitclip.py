@@ -1029,15 +1029,16 @@ class MessageBubble(QFrame):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_message_menu)
         self.setObjectName('chatBubble')
-        shade = '#295047' if own else '#243440'
+        theme=app.palette
+        shade = QColor(theme['accent']).darker(250).name() if own else theme['raised']
         self.setStyleSheet(
             f'QFrame#chatBubble{{background:{shade};border:1px solid '+
-            ('#39705F' if own else '#344A59')+
-            ';border-radius:12px;} QLabel{border:0;background:transparent;}')
-        self.setMaximumWidth(354)
+            (QColor(theme['accent']).darker(180).name() if own else theme['border'])+
+            ';border-radius:17px;} QLabel{border:0;background:transparent;}')
+        self.setMaximumWidth(475)
         self.setMinimumWidth(140)
         self.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Preferred)
-        inner=QVBoxLayout(self);inner.setContentsMargins(9,5,9,4);inner.setSpacing(1)
+        inner=QVBoxLayout(self);inner.setContentsMargins(14,10,14,8);inner.setSpacing(4)
         if not own and sender:
             who=QLabel(sender)
             who.setStyleSheet('color:#95C7BF;font-size:10px;font-weight:600;')
@@ -1080,8 +1081,8 @@ class MessageBubble(QFrame):
             excerpt.setTextInteractionFlags(Qt.TextSelectableByMouse)
             excerpt.setTextFormat(Qt.PlainText)
             excerpt.setWordWrap(True)
-            excerpt.setMaximumWidth(326)
-            excerpt.setStyleSheet('font-size:12px;color:#F1F6F7;')
+            excerpt.setMaximumWidth(440)
+            excerpt.setStyleSheet('font-size:13px;color:'+theme['text']+';line-height:1.3;')
             inner.addWidget(excerpt)
         # Keep only the timestamp in the layout. Tools are overlaid on hover,
         # so the bubble never changes height when action buttons appear.
@@ -1157,9 +1158,33 @@ class MessageBubble(QFrame):
 
 class ChatComposer(QPlainTextEdit):
     """Enter sends; Shift+Enter inserts a newline. Ctrl/Cmd+Enter also sends."""
-    def __init__(self,send_callback,parent=None):
+    def __init__(self,send_callback,parent=None,file_callback=None):
         super().__init__(parent)
         self.send_callback=send_callback
+        self.file_callback=file_callback
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self,event):
+        if self.file_callback and event.mimeData().hasUrls() and any(
+                url.isLocalFile() for url in event.mimeData().urls()):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self,event):
+        if self.file_callback and event.mimeData().hasUrls() and any(
+                url.isLocalFile() for url in event.mimeData().urls()):
+            event.acceptProposedAction()
+        else:super().dragMoveEvent(event)
+
+    def dropEvent(self,event):
+        if self.file_callback and event.mimeData().hasUrls():
+            paths=[url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if paths:
+                self.file_callback(paths)
+                event.acceptProposedAction()
+                return
+        super().dropEvent(event)
 
     def keyPressEvent(self,event):
         if event.key() in (Qt.Key_Return,Qt.Key_Enter):
@@ -1181,14 +1206,29 @@ class ChatWindow(QWidget):
         self.reply_to=None
         self.setWindowTitle('ORBITclip · Сообщения · v'+CLIENT_VERSION)
         self.setWindowIcon(QIcon(str(ASSETS/'orbit_icon.png')))
-        self.resize(1000,710)
-        self.setMinimumSize(720,490)
+        self.resize(1120,760)
+        self.setMinimumSize(790,550)
+        self.setAcceptDrops(True)
         self.build()
 
     def build(self):
-        lay=QVBoxLayout(self);lay.setContentsMargins(10,10,10,10);lay.setSpacing(7)
+        self.setObjectName('messengerShell')
+        self.setStyleSheet("""
+            QWidget#messengerShell{background:#111C25;}
+            QFrame#chatSidebar{background:#192833;border:1px solid #2B4251;border-radius:16px;}
+            QFrame#chatHeader{background:#1B2B37;border:1px solid #2C4150;border-radius:14px;}
+            QFrame#chatComposer{background:#20313F;border:1px solid #344A59;border-radius:17px;}
+            QFrame#chatComposer:focus-within{border-color:#7197A4;}
+            QPlainTextEdit#chatInput{background:transparent;border:0;padding:8px 6px;font-size:13px;}
+            QListWidget#dialogList{background:transparent;border:0;outline:0;}
+            QListWidget#dialogList::item{border-radius:11px;padding:12px 10px;margin-bottom:4px;
+                                            background:transparent;color:#D4E3EB;}
+            QListWidget#dialogList::item:hover{background:#2B4250;}
+            QListWidget#dialogList::item:selected{background:#345464;color:#FFFFFF;}
+        """)
+        lay=QVBoxLayout(self);lay.setContentsMargins(12,11,12,12);lay.setSpacing(10)
         headline=QHBoxLayout()
-        title=QLabel('ORBITclip');title.setStyleSheet('font-size:19px;font-weight:750;color:#F5B49F;')
+        title=QLabel('ORBITclip');title.setStyleSheet('font-size:20px;font-weight:750;color:#F5B49F;')
         headline.addWidget(title)
         headline.addWidget(label(' / сообщения'))
         headline.addStretch()
@@ -1208,25 +1248,24 @@ class ChatWindow(QWidget):
     def build_chat(self):
         page=QWidget()
         outer=QHBoxLayout(page);outer.setContentsMargins(0,2,0,0);outer.setSpacing(8)
-        sidebar=QFrame();sidebar.setObjectName('side');sidebar.setFixedWidth(245)
-        left=QVBoxLayout(sidebar);left.setContentsMargins(8,10,8,10);left.setSpacing(8)
-        label_convos=QLabel('ДИАЛОГИ');label_convos.setObjectName('subhead');left.addWidget(label_convos)
+        sidebar=QFrame();sidebar.setObjectName('chatSidebar');sidebar.setFixedWidth(282)
+        left=QVBoxLayout(sidebar);left.setContentsMargins(12,15,12,12);left.setSpacing(10)
+        label_convos=QLabel('Диалоги');label_convos.setStyleSheet('font-weight:700;font-size:15px;');left.addWidget(label_convos)
         self.sidebar_search=QLineEdit()
-        self.sidebar_search.setPlaceholderText('Найти устройство…')
+        self.sidebar_search.setPlaceholderText('⌕  Поиск по диалогам')
         self.sidebar_search.textChanged.connect(self.refresh_dialog_list)
         left.addWidget(self.sidebar_search)
-        self.dialog_list=QListWidget();self.dialog_list.setSpacing(5)
+        self.dialog_list=QListWidget()
+        self.dialog_list.setObjectName('dialogList')
+        self.dialog_list.setSpacing(2)
         self.dialog_list.setWordWrap(True)
-        self.dialog_list.setStyleSheet('QListWidget{background:transparent;border:0;outline:none;}'
-            'QListWidget::item{background:#1A2B37;border-radius:10px;padding:9px 7px;}'
-            'QListWidget::item:selected{background:#34505B;color:#FFF3ED;}')
         self.dialog_list.currentItemChanged.connect(self.choose_dialog)
         left.addWidget(self.dialog_list,1)
         left.addWidget(action('＋  Подключить устройство',lambda:self.set_page(1)))
         outer.addWidget(sidebar)
         right=QVBoxLayout();right.setSpacing(7);right.setContentsMargins(0,0,0,0)
-        bar=QFrame();bar.setObjectName('side')
-        heading=QHBoxLayout(bar);heading.setContentsMargins(12,9,12,9);heading.setSpacing(9)
+        bar=QFrame();bar.setObjectName('chatHeader')
+        heading=QHBoxLayout(bar);heading.setContentsMargins(16,12,16,12);heading.setSpacing(12)
         self.avatar=QLabel('◎');self.avatar.setFixedSize(38,38);self.avatar.setAlignment(Qt.AlignCenter)
         self.avatar.setStyleSheet('background:#354E57;color:#9FE5D0;border-radius:19px;font-size:18px;font-weight:700;')
         heading.addWidget(self.avatar)
@@ -1253,10 +1292,10 @@ class ChatWindow(QWidget):
         right.addLayout(filters)
         self.msg_scroll=QScrollArea();self.msg_scroll.setWidgetResizable(True)
         self.msg_scroll.setObjectName('messageScroll')
-        self.msg_scroll.setStyleSheet('QScrollArea#messageScroll{background:#121E28;border-radius:14px;}')
-        self.msg_container=QWidget();self.msg_container.setStyleSheet('background:#121E28;')
+        self.msg_scroll.setStyleSheet('QScrollArea#messageScroll{background:#14222D;border-radius:15px;border:0;}')
+        self.msg_container=QWidget();self.msg_container.setStyleSheet('background:#14222D;')
         self.msg_layout=QVBoxLayout(self.msg_container)
-        self.msg_layout.setContentsMargins(7,6,7,6);self.msg_layout.setSpacing(2)
+        self.msg_layout.setContentsMargins(18,12,18,12);self.msg_layout.setSpacing(5)
         self.msg_scroll.setWidget(self.msg_container);right.addWidget(self.msg_scroll,1)
         self.reply_bar=QFrame();self.reply_bar.setObjectName('card')
         reply_layout=QHBoxLayout(self.reply_bar);reply_layout.setContentsMargins(10,5,6,5)
@@ -1264,13 +1303,14 @@ class ChatWindow(QWidget):
         reply_layout.addWidget(self.reply_label,1)
         reply_layout.addWidget(tool('close','Отменить ответ',self.cancel_reply))
         self.reply_bar.hide();right.addWidget(self.reply_bar)
-        composer=QFrame();composer.setObjectName('side')
-        compose_row=QHBoxLayout(composer);compose_row.setContentsMargins(8,7,8,7);compose_row.setSpacing(5)
+        composer=QFrame();composer.setObjectName('chatComposer')
+        compose_row=QHBoxLayout(composer);compose_row.setContentsMargins(10,8,10,8);compose_row.setSpacing(8)
         compose_row.addWidget(tool('document','Прикрепить файл (до 3 МБ)',self.send_file))
         compose_row.addWidget(tool('clipboard','Отправить содержимое буфера',self.send_clipboard))
-        self.compose=ChatComposer(self.send_text)
-        self.compose.setPlaceholderText('Сообщение…   Enter — отправить · Shift+Enter — новая строка')
-        self.compose.setFixedHeight(55)
+        self.compose=ChatComposer(self.send_text,file_callback=self.send_files)
+        self.compose.setObjectName('chatInput')
+        self.compose.setPlaceholderText('Написать сообщение…  ·  Перетащи файлы сюда')
+        self.compose.setFixedHeight(58)
         self.compose.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         compose_row.addWidget(self.compose,1)
         compose_row.addWidget(tool('favorite','Эмодзи',self.open_emoji))
@@ -1278,7 +1318,7 @@ class ChatWindow(QWidget):
         self.send_button.setFixedSize(44,43)
         compose_row.addWidget(self.send_button)
         right.addWidget(composer)
-        footer=label('Сквозное шифрование между доверенными устройствами · сообщения доступны, пока оба устройства онлайн')
+        footer=label('🔒 Шифрованный обмен · Перетащи файл в окно переписки · До 3 МБ на файл')
         right.addWidget(footer)
         outer.addLayout(right,1)
         self.pages.addWidget(page)
@@ -1332,6 +1372,7 @@ class ChatWindow(QWidget):
             item=QListWidgetItem(f'{status}  {name}{count}\n     {truncate(snippet,42)}')
             item.setData(Qt.UserRole,peer)
             item.setToolTip(name)
+            item.setSizeHint(QSize(245,66))
             self.dialog_list.addItem(item)
             if peer==currently:self.dialog_list.setCurrentItem(item)
         self.dialog_list.blockSignals(False)
@@ -1343,6 +1384,7 @@ class ChatWindow(QWidget):
         contact=self.app.identity.trusted.get(peer)
         name=(contact or {}).get('name') or ('Старая пара · PIN' if peer=='legacy' else 'Нет выбранного устройства')
         self.peer_name.setText(name)
+        self.avatar.setText(name[:1].upper() if name else '◉')
         peers={p.get('id') for p in self.app.online_devices}
         text='● В сети' if peer in peers else ('○ Ожидаем подключения' if peer else 'Открой подключение, чтобы добавить устройство')
         if self.app.offline:text='○ Режим оффлайн'
@@ -1647,13 +1689,51 @@ class ChatWindow(QWidget):
         self.app.send_to_active({'kind':'text','text':value,'origin':'clipboard'})
 
     def send_file(self):
+        file,_=QFileDialog.getOpenFileName(self,'Отправить файл (до 3 МБ)')
+        if file:self.send_files([file])
+
+    def send_files(self,paths):
         if self.app.offline:return error(self,'В настройках включён режим оффлайн')
-        if not self.app.active_channel()[0]:return error(self,'Выбери подключённое устройство')
-        file,_=QFileDialog.getOpenFileName(self,'Выбери файл (до 3 МБ)')
-        if not file:return
-        raw=Path(file).read_bytes()
-        if len(raw)>MAX_FILE_SIZE:return error(self,'Файл превышает 3 МБ')
-        self.app.send_to_active({'kind':'file','origin':'clipboard','name':Path(file).name,'bytes':base64.b64encode(raw).decode('ascii')})
+        if not self.app.active_channel()[0]:return error(self,'Сначала выбери получателя')
+        sent=0
+        for path in list(paths)[:10]:
+            file=Path(path)
+            try:
+                if not file.is_file():continue
+                size=file.stat().st_size
+                if size>MAX_FILE_SIZE:
+                    error(self,f'«{file.name}»: превышен лимит 3 МБ')
+                    continue
+                raw=file.read_bytes()
+                if len(raw)>MAX_FILE_SIZE:continue
+            except OSError as exc:
+                error(self,f'Не удалось прочитать «{file.name}»: {exc}')
+                continue
+            ok=self.app.send_to_active({
+                'kind':'file','origin':'clipboard','name':file.name,
+                'bytes':base64.b64encode(raw).decode('ascii')})
+            if not ok:break
+            sent+=1
+        if sent:self.app.toast.pop(f'Отправляется файлов: {sent}')
+
+    def dragEnterEvent(self,event):
+        if event.mimeData().hasUrls() and any(u.isLocalFile() for u in event.mimeData().urls()):
+            event.acceptProposedAction()
+        else:super().dragEnterEvent(event)
+
+    def dragMoveEvent(self,event):
+        if event.mimeData().hasUrls() and any(u.isLocalFile() for u in event.mimeData().urls()):
+            event.acceptProposedAction()
+        else:super().dragMoveEvent(event)
+
+    def dropEvent(self,event):
+        if event.mimeData().hasUrls():
+            paths=[u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+            if paths:
+                self.send_files(paths)
+                event.acceptProposedAction()
+                return
+        super().dropEvent(event)
 
 
 
