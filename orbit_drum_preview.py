@@ -31,6 +31,10 @@ class DrumLivePreview(QWidget):
         self.demo.drum_options=dict(app.drum_options)
         self.demo.animate_drum_categories=False
         self.engine=DrumBubble(self.demo)
+        # Preview renderer is a hidden CHILD, not a macOS floating tool window.
+        # This also gives Qt deterministic ownership and teardown.
+        self.engine.setParent(self, Qt.Widget)
+        self.engine.hide()
         self.engine._entries=list(SAMPLES)
         self.engine.heading="Пример барабана"
         self.engine.position="3 / 5"
@@ -82,6 +86,3 @@ class DrumLivePreview(QWidget):
                               Qt.KeepAspectRatio,Qt.SmoothTransformation))
         self.picture.setFixedHeight(min(280,max(210,round(output.height()*490/max(1,output.width()))+22)))
 
-    def closeEvent(self,event):
-        self.engine.close()
-        super().closeEvent(event)
