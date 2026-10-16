@@ -415,7 +415,7 @@ class CategoryEditor(QDialog):
         l=QVBoxLayout(dialog);l.addWidget(label('Имя категории'))
         name=QLineEdit(c['name'] if c else '');l.addWidget(name)
         l.addWidget(label('Векторная иконка'))
-        icons=QComboBox()
+        icons=OrbitSelect()
         for entry in ICONS:icons.addItem(icon(entry),entry,entry)
         if c:icons.setCurrentIndex(max(0,icons.findData(c['icon'])))
         l.addWidget(icons)
@@ -461,7 +461,7 @@ class WheelEditor(QDialog):
         layout.addWidget(label('Перетаскивай записи мышью. Порядок сохраняется для обычной прокрутки.'))
         head=QHBoxLayout();layout.addLayout(head)
         head.addWidget(label('Категория'))
-        self.cat=QComboBox()
+        self.cat=OrbitSelect()
         for c in app.categories.wheel_categories():self.cat.addItem(icon(c['icon']),c['name'],c['id'])
         self.cat.currentIndexChanged.connect(self.rebuild);head.addWidget(self.cat,1)
         head.addWidget(label('Лимит'))
@@ -965,7 +965,7 @@ class VaultWindow(QWidget):
         lay.addWidget(label('Название'))
         name=QLineEdit(item.get('title',''));lay.addWidget(name)
         lay.addWidget(label('Категория'))
-        cats=QComboBox();cats.addItem('Без категории','')
+        cats=OrbitSelect();cats.addItem('Без категории','')
         for c in self.app.categories.categories:
             if c['id'] not in ('all','favorites','code') and c.get('visible',True):
                 cats.addItem(c['name'],c['id'])
@@ -1235,7 +1235,7 @@ class ChatWindow(QWidget):
         heading.addWidget(tool('settings','Управление подключениями',lambda:self.set_page(1)))
         right.addWidget(bar)
         filters=QHBoxLayout();filters.setSpacing(5)
-        self.channel=QComboBox();self.channel.setMaximumWidth(175)
+        self.channel=OrbitSelect();self.channel.setMaximumWidth(175)
         self.channel.addItem('Все сообщения','all')
         self.channel.addItem('Переписка','chat')
         self.channel.addItem('Только буфер и файлы','clipboard')
@@ -1707,13 +1707,29 @@ class OnlineWindow(QWidget):
         self.app.directory.request(peer_id)
         self.info.setText('Запрос отправляется…')
 
+class OrbitSelect(QComboBox):
+    """Uniform non-native dropdown with enough vertical room for text."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        view=QListWidget()
+        view.setSpacing(3)
+        view.setStyleSheet("QListWidget {padding:6px; border:1px solid #526677;}"
+                           "QListWidget::item {min-height:30px; padding:5px 12px;}"
+                           "QListWidget::item:selected {border-radius:6px;}")
+        self.setView(view)
+        self.setMinimumHeight(38)
+        self.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(16)
+
+
 class LocalWheelFilter(QObject):
     """Ctrl+wheel fallback for focused ORBITclip windows without system permissions."""
     def __init__(self,app):
         super().__init__();self.app=app
 
     def eventFilter(self,obj,event):
-        if event.type()==QEvent.Wheel and event.modifiers() & Qt.ControlModifier:
+        if (event.type()==QEvent.Wheel and event.modifiers() & Qt.ControlModifier
+                and (self.app.wheel_activation_mode == 'wheel' or self.app.wheel._selected)):
             # Do not echo events consumed by the native hook.
             if time.monotonic()-self.app.wheel.last_move>0.09:
                 dy=event.angleDelta().y() / 120.0
@@ -1752,13 +1768,21 @@ class PreferencesWindow(QWidget):
         paste_info.setWordWrap(True)
         lay.addWidget(paste_info)
         lay.addWidget(label('Цветовая тема'))
-        self.themes=QComboBox()
+        self.themes=OrbitSelect()
         for key,item in THEMES.items():self.themes.addItem(item['name'],key)
         self.themes.setCurrentIndex(max(0,self.themes.findData(app.appearance_theme)))
         lay.addWidget(self.themes)
         self.themes.currentIndexChanged.connect(lambda *_:app.set_theme(self.themes.currentData()))
-        lay.addWidget(label('Превью при выборе Ctrl + колесом'))
-        self.wheel_view=QComboBox();self.wheel_view.addItem('Компактное окно','compact')
+        lay.addWidget(label('Способ вызова истории буфера'))
+        self.activation=OrbitSelect()
+        self.activation.addItem('Ctrl + колесо', 'wheel')
+        self.activation.addItem('Удерживать Ctrl → однократно Alt', 'ctrl_alt')
+        self.activation.setCurrentIndex(max(0,self.activation.findData(app.wheel_activation_mode)))
+        self.activation.currentIndexChanged.connect(
+            lambda *_: app.set_wheel_activation_mode(self.activation.currentData()))
+        lay.addWidget(self.activation)
+        lay.addWidget(label('Представление истории буфера'))
+        self.wheel_view=OrbitSelect();self.wheel_view.addItem('Компактное окно','compact')
         self.wheel_view.addItem('Объёмный барабан · плавное вращение','drum')
         self.wheel_view.setCurrentIndex(1 if app.wheel_view=='drum' else 0)
         lay.addWidget(self.wheel_view)
@@ -1802,6 +1826,7 @@ class OrbitApp:
         self.analytics=AnalyticsStore(enabled=self.settings.get('analytics_enabled',True))
         self.hide_clock_windows=bool(self.settings.get('hide_clock_windows',False)) if platform.system() in ('Windows','Darwin') else False
         self.tray_icon=None;self.tray_menu=None;self.tray_clock_action=None;self.chat_status_icon=None
+        self._popup_notification=None
         self.offline=bool(self.settings.get('offline_mode',False))
         self.paste_on_release=bool(self.settings.get('paste_on_release',False))
         self.vault=ClipboardVault()
@@ -1830,6 +1855,8 @@ class OrbitApp:
         self.bridge=RemoteBridge()
         self.bridge.set_online(not self.offline)
         self.hotkeys=Hotkeys();self.wheel=ClipboardWheel()
+        self.wheel_activation_mode=str(self.settings.get('wheel_activation_mode','wheel'))
+        self.wheel.set_activation_mode(self.wheel_activation_mode)
         self.hotkeys.configure(self.vault.items)
         self.wheel.start()
         self.local_wheel_filter=LocalWheelFilter(self)
@@ -1887,6 +1914,12 @@ class OrbitApp:
             except ValueError as exc:
                 QMessageBox.warning(None,'Псевдоним обязателен',str(exc))
 
+    def set_wheel_activation_mode(self, mode):
+        self.wheel_activation_mode='ctrl_alt' if mode=='ctrl_alt' else 'wheel'
+        self.wheel.set_activation_mode(self.wheel_activation_mode)
+        self.settings['wheel_activation_mode']=self.wheel_activation_mode
+        self.save_settings()
+
     def set_wheel_view(self, mode):
         mode='drum' if mode=='drum' else 'compact'
         if self.wheel_view==mode:return
@@ -1927,6 +1960,7 @@ class OrbitApp:
         history.setContextMenu(hm)
         history.activated.connect(lambda reason:self.open_history() if reason==QSystemTrayIcon.ActivationReason.DoubleClick else None)
         history.show()
+        history.messageClicked.connect(self.open_popup_notification)
         self.tray_icon=history;self.tray_menu=hm
         messenger=QSystemTrayIcon(self.qt)
         messenger.setIcon(icon('send'))
@@ -1955,9 +1989,28 @@ class OrbitApp:
         # QSystemTrayIcon requests native notifications; fallback only if absent.
         if not show_popup:return
         if (self.tray_icon is not None and QSystemTrayIcon.supportsMessages()):
-            self.tray_icon.showMessage(title,description or title,QSystemTrayIcon.Information,2600)
+            self._popup_notification=(kind,target,item)
+            self.tray_icon.showMessage(title,description or title,QSystemTrayIcon.Information,5000)
         else:
             self.toast.pop(title if not description else title+' · '+description)
+
+    def open_popup_notification(self):
+        pending=self._popup_notification
+        self._popup_notification=None
+        if pending is None:
+            self.open_notification_center()
+            return
+        kind,target,identifier=pending
+        self.notifications.mark_read(identifier)
+        self.update_notification_badge()
+        if kind=='messages':
+            if target in self.identity.trusted:
+                self.selected_peer=target
+            self.open_chat()
+        elif kind in ('files','spaces'):
+            self.open_workspaces()
+        else:
+            self.open_notification_center()
 
     def open_notification_center(self):
         if self.notification_window is None:self.notification_window=NotificationCenterWindow(self)
@@ -2012,6 +2065,7 @@ class OrbitApp:
         menu.addAction('Завершить ORBITclip',lambda checked=False:self.shutdown())
         tray.setContextMenu(menu)
         tray.activated.connect(self.tray_activated)
+        tray.messageClicked.connect(self.open_popup_notification)
         self.tray_icon=tray;self.tray_menu=menu
         self.refresh_tray_menu()
         tray.show()
@@ -2078,7 +2132,7 @@ class OrbitApp:
         self.online_window.show();self.online_window.raise_();self.online_window.activateWindow()
 
     def save_settings(self):
-        self.settings.update(wheel_view=self.wheel_view,appearance_theme=self.appearance_theme,analytics_enabled=self.analytics.enabled,remote_url=self.url,https_url=self.url,remote_token=self.token,https_token=self.token,
+        self.settings.update(wheel_activation_mode=self.wheel_activation_mode,wheel_view=self.wheel_view,appearance_theme=self.appearance_theme,analytics_enabled=self.analytics.enabled,remote_url=self.url,https_url=self.url,remote_token=self.token,https_token=self.token,
                              remote_pair=self.remote_pair,https_pair=self.remote_pair,remote_device=self.device,
                              remote_tls_pin=self.tls_pin,https_tls_pin=self.tls_pin,
                              remote_cursor=self.cursor,remote_cursor_place=self.cursor_place,
@@ -2100,6 +2154,7 @@ class OrbitApp:
         if content and content != self._last_clip:
             self._last_clip=content;self.add_to_history(content);self.clock.flash()
             self.analytics.record('clip_capture',foreground_app())
+            self.analytics.record_text(content)
 
     def add_to_history(self,value,force=False):
         if not value or (self.paused and not force):return
