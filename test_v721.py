@@ -38,7 +38,7 @@ class UX721Tests(unittest.TestCase):
 
     def test_chat_actions_are_hover_only_and_bubbles_narrow(self):
         bubble=ast.get_source_segment(SRC,CLASSES['MessageBubble'])
-        self.assertIn('self.setMaximumWidth(354)',bubble)
+        self.assertIn('self.setMaximumWidth(475)',bubble)
         self.assertIn('self.hover_actions.hide()',bubble)
         self.assertIn('self.hover_actions.show()',source_method('MessageBubble','enterEvent'))
         self.assertIn('self.hover_actions.setGeometry',bubble)
