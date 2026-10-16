@@ -76,6 +76,26 @@ def bundle(version):
                 add_zip_member(z,p,str(Path('ORBITclip')/p.relative_to(ROOT)))
     print(out.name,out.stat().st_size,'bytes,',len(root_files),'root files')
 
+# Exactly the files shipped by bundle(), less machine-specific configuration.
+# README.md was never in CleanInstall, yet old patches treated it as mandatory
+# and refused to install. A patch must never depend on absent documentation.
+_PATCH_ROOT_FILES = {'requirements-client.txt', 'start_windows.bat', 'start_mac.command'}
+_PATCH_ASSET_EXT = {'.png', '.svg', '.ico', '.icns', '.gif', '.jpg', '.jpeg', '.webp'}
+
+def patchable_path(rel):
+    """Only files actually shipped as runtime payload in a clean install."""
+    if not isinstance(rel, Path) or rel.is_absolute() or '..' in rel.parts:
+        return False
+    if len(rel.parts) == 1:
+        return (
+            rel.suffix == '.py'
+            and not rel.name.startswith('test_')
+            and rel.name != 'orbit_capture.py'
+        ) or rel.name in _PATCH_ROOT_FILES
+    return (len(rel.parts) >= 2 and rel.parts[0] == 'assets'
+            and rel.suffix.lower() in _PATCH_ASSET_EXT)
+
+
 def incremental_patch(version):
     """Build only changed client modules since the preceding version."""
     import subprocess
@@ -87,14 +107,15 @@ def incremental_patch(version):
     except (OSError,subprocess.CalledProcessError):
         print('Previous tag unavailable; incremental patch skipped')
         return
-    allowed={'.py','.json','.txt','.md','.command','.bat','.svg','.png','.ico','.icns','.gif'}
+    # Do not include user-edited defaults or documentation.
+    # Only ship executable/runtime files present in the clean install.
     records=[]; contents={}
     for line in changes:
         columns=line.split(chr(9))
         status=columns[0][0]
         if status not in ('A','M','D') or len(columns)!=2: continue
         rel=Path(columns[1])
-        if rel.name.startswith('test_') or rel.parts[0] in ('.github','tools','docs','patches','dist') or rel.suffix.lower() not in allowed: continue
+        if not patchable_path(rel): continue
         before=hashlib.sha256(git('show',oldtag+':'+rel.as_posix())).hexdigest() if status!='A' else None
         body=(ROOT/rel).read_bytes() if status!='D' else None
         after=hashlib.sha256(body).hexdigest() if body is not None else None
