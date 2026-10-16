@@ -25,7 +25,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QBrush, QCursor,
 from PySide6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QToolButton, QLineEdit, QScrollArea, QPlainTextEdit, QComboBox, QDialog, QMenu,
-    QInputDialog, QMessageBox, QFileDialog, QFormLayout, QSpinBox, QCheckBox,
+    QInputDialog, QMessageBox, QFileDialog, QFormLayout, QSpinBox, QSlider, QCheckBox,
     QSizePolicy, QStackedWidget, QGraphicsDropShadowEffect, QListWidget, QListWidgetItem, QAbstractItemView, QDialogButtonBox, QTableWidget, QTableWidgetItem, QHeaderView, QSystemTrayIcon
 )
 
@@ -54,6 +54,8 @@ from orbit_analytics import AnalyticsStore
 from orbit_activity_ui import NotificationCenterWindow, AnalyticsWindow
 from orbit_drum import DrumBubble
 from orbit_drum_styles import DRUM_STYLES, normalize_drum_style
+from orbit_drum_layout import (DEFAULTS as DRUM_DEFAULTS, normalize_options as normalize_drum_options,
+                               SHAPES, POSITIONS, HEADERS, HEADER_POSITIONS)
 from orbit_select import OrbitSelect
 from orbit_flow import PasteQueue, normalize_exclusions, is_excluded
 from orbit_global_shortcuts import FlowShortcuts
@@ -1896,6 +1898,70 @@ class PreferencesWindow(QWidget):
         self.wheel_view.currentIndexChanged.connect(
             lambda *_:self.drum_motion.setEnabled(self.wheel_view.currentData()=='drum'))
         lay.addWidget(self.drum_motion)
+        lay.addWidget(label('Компоновка барабана'))
+        self.drum_shape=OrbitSelect()
+        for key,(name,dimensions) in SHAPES.items():
+            self.drum_shape.addItem(f'{name} · {dimensions[0]}×{dimensions[1]}',key)
+        self.drum_shape.setCurrentIndex(max(0,self.drum_shape.findData(app.drum_options['shape'])))
+        lay.addWidget(self.drum_shape)
+        self.drum_shape.currentIndexChanged.connect(
+            lambda *_:app.set_drum_option('shape',self.drum_shape.currentData()))
+        lay.addWidget(label('Где показывать барабан'))
+        self.drum_position=OrbitSelect()
+        for key,name in POSITIONS.items():self.drum_position.addItem(name,key)
+        self.drum_position.setCurrentIndex(max(0,self.drum_position.findData(app.drum_options['position'])))
+        lay.addWidget(self.drum_position)
+        self.drum_position.currentIndexChanged.connect(
+            lambda *_:app.set_drum_option('position',self.drum_position.currentData()))
+        lay.addWidget(label('Заголовок'))
+        header_row=QHBoxLayout()
+        self.drum_header=OrbitSelect()
+        for key,name in HEADERS.items():self.drum_header.addItem(name,key)
+        self.drum_header.setCurrentIndex(max(0,self.drum_header.findData(app.drum_options['header'])))
+        self.drum_header.currentIndexChanged.connect(
+            lambda *_:app.set_drum_option('header',self.drum_header.currentData()))
+        header_row.addWidget(self.drum_header,2)
+        self.drum_header_place=OrbitSelect()
+        for key,name in HEADER_POSITIONS.items():self.drum_header_place.addItem(name,key)
+        self.drum_header_place.setCurrentIndex(max(0,self.drum_header_place.findData(app.drum_options['header_position'])))
+        self.drum_header_place.currentIndexChanged.connect(
+            lambda *_:app.set_drum_option('header_position',self.drum_header_place.currentData()))
+        header_row.addWidget(self.drum_header_place,1)
+        lay.addLayout(header_row)
+        self.drum_index=QCheckBox('Показывать позицию записи (3 / 12)')
+        self.drum_index.setChecked(app.drum_options['show_index'])
+        self.drum_index.toggled.connect(lambda x:app.set_drum_option('show_index',x))
+        lay.addWidget(self.drum_index)
+
+        self.drum_sliders=[]
+        def drum_slider(caption,key,low,high,suffix=''):
+            line=QHBoxLayout()
+            label_text=QLabel(caption)
+            label_text.setMinimumWidth(160)
+            line.addWidget(label_text)
+            slider=QSlider(Qt.Horizontal)
+            slider.setRange(low,high)
+            slider.setValue(app.drum_options[key])
+            line.addWidget(slider,1)
+            value=QLabel(str(slider.value())+suffix)
+            value.setMinimumWidth(42)
+            value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            line.addWidget(value)
+            slider.valueChanged.connect(
+                lambda n,k=key,v=value,unit=suffix:(v.setText(str(n)+unit),app.set_drum_option(k,n)))
+            lay.addLayout(line)
+            self.drum_sliders.append(slider)
+        drum_slider('Прозрачность барабана','opacity',35,100,'%')
+        drum_slider('Видимость соседей','neighbor_opacity',5,100,'%')
+        drum_slider('Смещение соседей','neighbor_gap',0,65,' px')
+        drum_slider('Соседей с каждой стороны','neighbors',1,4)
+        self.drum_controls=[self.drum_shape,self.drum_position,self.drum_header,
+                            self.drum_header_place,self.drum_index,*self.drum_sliders]
+        def sync_drum_controls(*_):
+            active=self.wheel_view.currentData()=='drum'
+            for widget in self.drum_controls:widget.setEnabled(active)
+        self.wheel_view.currentIndexChanged.connect(sync_drum_controls)
+        sync_drum_controls()
         lay.addWidget(label('Приватность буфера'))
         self.exclusions=QLineEdit(', '.join(app.excluded_apps))
         self.exclusions.setPlaceholderText('Приложения: 1Password, KeePassXC, …')
@@ -1999,6 +2065,7 @@ class OrbitApp:
         self.toast=FloatingToast()
         self.wheel_view=str(self.settings.get('wheel_view','compact'))
         self.drum_style=normalize_drum_style(self.settings.get('drum_style','minimal'))
+        self.drum_options=normalize_drum_options(self.settings.get('drum_options'))
         self.animate_drum_categories=bool(self.settings.get('animate_drum_categories',True))
         self.bubble=DrumBubble(self) if self.wheel_view=='drum' else ScrollBubble()
         self.flow_palette=None
@@ -2057,6 +2124,16 @@ class OrbitApp:
         self.wheel_view=mode
         self.bubble=DrumBubble(self) if mode=='drum' else ScrollBubble()
         self.settings['wheel_view']=mode;self.save_settings()
+
+    def set_drum_option(self,key,value):
+        updated=dict(self.drum_options)
+        updated[key]=value
+        validated=normalize_drum_options(updated)
+        if validated==self.drum_options:return
+        self.drum_options=validated
+        if isinstance(self.bubble,DrumBubble):
+            self.bubble.set_options(validated)
+        self.save_settings()
 
     def set_drum_style(self,style):
         value=normalize_drum_style(style)
@@ -2286,7 +2363,7 @@ class OrbitApp:
         self.online_window.show();self.online_window.raise_();self.online_window.activateWindow()
 
     def save_settings(self):
-        self.settings.update(drum_style=self.drum_style,animate_drum_categories=self.animate_drum_categories,wheel_activation_mode=self.wheel_activation_mode,wheel_view=self.wheel_view,appearance_theme=self.appearance_theme,analytics_enabled=self.analytics.enabled,remote_url=self.url,https_url=self.url,remote_token=self.token,https_token=self.token,
+        self.settings.update(drum_options=self.drum_options,drum_style=self.drum_style,animate_drum_categories=self.animate_drum_categories,wheel_activation_mode=self.wheel_activation_mode,wheel_view=self.wheel_view,appearance_theme=self.appearance_theme,analytics_enabled=self.analytics.enabled,remote_url=self.url,https_url=self.url,remote_token=self.token,https_token=self.token,
                              remote_pair=self.remote_pair,https_pair=self.remote_pair,remote_device=self.device,
                              remote_tls_pin=self.tls_pin,https_tls_pin=self.tls_pin,
                              remote_cursor=self.cursor,remote_cursor_place=self.cursor_place,
