@@ -38,6 +38,8 @@ class ExperienceQtTests(unittest.TestCase):
             self.assertEqual(widget.position,3)
         finally:
             widget.close()
+            widget.deleteLater()
+            self.qt.processEvents()
 
     def test_update_dialog_does_not_contact_network_on_construction(self):
         from orbit_update_ui import UpdateWindow
@@ -49,7 +51,10 @@ class ExperienceQtTests(unittest.TestCase):
             self.assertFalse(widget.install_button.isEnabled())
             self.assertIsNone(widget.release)
         finally:
+            widget.poller.stop()
             widget.close()
+            widget.deleteLater()
+            self.qt.processEvents()
 
 
 if __name__=='__main__':unittest.main()
