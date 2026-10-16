@@ -118,6 +118,12 @@ class ChainTests(unittest.TestCase):
         self.assertEqual((self.app/'app.py').read_bytes(),b'original')
         self.assertFalse((self.app/'.orbitclip_patch_backups'/'v7.8.1_to_v7.8.2').exists())
         self.assertEqual((self.app/'README.md').read_text(),'mine')
+        failed=list((self.app/'.orbitclip_patch_backups'/'failed').glob('v7.8.1_to_v7.9.3-*'))
+        self.assertEqual(len(failed),1)
+        self.assertEqual((failed[0]/'files'/'app.py').read_bytes(),b'original')
+        # A successful rollback must not permanently block a user retry.
+        self.assertEqual(install_chain(plan,self.app),'7.9.3')
+        self.assertEqual(read_version(self.app),'7.9.3')
 
     def test_route_uses_manifest_dependencies_not_sorted_versions(self):
         manifests=[({'from_version':'7.8.1','to_version':'7.8.2'},'a'),
