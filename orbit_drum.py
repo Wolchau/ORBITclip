@@ -16,6 +16,7 @@ from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication, QWidget
 
 from orbit_drum_geometry import next_target, visible_faces
+from orbit_drum_styles import DRUM_STYLES, normalize_drum_style
 
 
 class DrumBubble(QWidget):
@@ -24,6 +25,8 @@ class DrumBubble(QWidget):
     def __init__(self, app):
         super().__init__(None)
         self.app = app
+        self.style_name = normalize_drum_style(getattr(app, 'drum_style', 'minimal'))
+        self.animate_categories = bool(getattr(app, 'animate_drum_categories', True))
         self.setWindowFlags(
             Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint |
             Qt.WindowDoesNotAcceptFocus | Qt.NoDropShadowWindowHint |
@@ -46,6 +49,49 @@ class DrumBubble(QWidget):
         self._animation.setEasingCurve(QEasingCurve.OutCubic)
         self._animation.valueChanged.connect(self._set_cursor)
         self._animation.finished.connect(self._finish_animation)
+        self._category_frame = None
+        self._category_progress = 1.0
+        self._category_animation = QVariantAnimation(self)
+        self._category_animation.setDuration(215)
+        self._category_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._category_animation.valueChanged.connect(self._set_category_progress)
+        self._category_animation.finished.connect(self._finish_category_transition)
+
+    def set_style(self, value):
+        self.style_name = normalize_drum_style(value)
+        self.update()
+
+    def set_category_animation(self, enabled):
+        self.animate_categories = bool(enabled)
+        if not self.animate_categories:
+            self._category_animation.stop()
+            self._category_frame = None
+            self._category_progress = 1.0
+            self.update()
+
+    def _begin_category_transition(self, next_heading):
+        if str(next_heading) == self.heading or not self.isVisible() or not self._entries:
+            return
+        self._category_animation.stop()
+        self._category_frame = (self.heading, self.position,
+                                list(self._entries), self._cursor, self._static_mode)
+        if self.animate_categories:
+            self._category_progress = 0.0
+            self._category_animation.setStartValue(0.0)
+            self._category_animation.setEndValue(1.0)
+            self._category_animation.start()
+        else:
+            self._category_frame = None
+            self._category_progress = 1.0
+
+    def _set_category_progress(self, value):
+        self._category_progress = float(value)
+        self.update()
+
+    def _finish_category_transition(self):
+        self._category_progress = 1.0
+        self._category_frame = None
+        self.update()
 
     @staticmethod
     def _preview(item):
@@ -68,6 +114,7 @@ class DrumBubble(QWidget):
         keys = tuple(self._id(item) for item in choices)
         old_heading = self.heading
         visible_before = self.isVisible()
+        self._begin_category_transition(category)
         self.heading = str(category)
         self.position = f'{index + 1} / {count}'
         self.items = [self._preview(choices[(index - 1) % count]),
@@ -99,6 +146,7 @@ class DrumBubble(QWidget):
     def show_item(self, item, cat_label, index, total):
         """Compatibility with the compact switcher's direct-single-item API."""
         self._animation.stop()
+        self._begin_category_transition(cat_label)
         self.heading = str(cat_label)
         self.position = f'{index + 1} / {total}'
         self.items = ['', self._preview(item), '']
@@ -111,6 +159,7 @@ class DrumBubble(QWidget):
 
     def show_empty(self, category):
         self._animation.stop()
+        self._begin_category_transition(category)
         self.heading = str(category)
         self.position = '0 / 0'
         self.items = ['', 'Нет записей', '']
@@ -131,6 +180,9 @@ class DrumBubble(QWidget):
 
     def hideEvent(self, event):
         self._animation.stop()
+        self._category_animation.stop()
+        self._category_frame = None
+        self._category_progress = 1.0
         super().hideEvent(event)
 
     def _display(self):
@@ -151,6 +203,7 @@ class DrumBubble(QWidget):
         self.raise_()
 
     def _draw_face(self, painter, face, preview, pal):
+        skin = DRUM_STYLES[self.style_name]
         intensity = face['opacity']
         y0, y1 = face['top_y'], face['bottom_y']
         if intensity <= .015 or y1 - y0 < 7:
@@ -168,32 +221,66 @@ class DrumBubble(QWidget):
         if abs(face['relative']) < .65:
             painter.save()
             painter.translate(0, 3)
-            shadow = QColor(0, 0, 0, int(37 * intensity))
+            shadow = QColor(0, 0, 0, int(skin['shadow'] * intensity))
             painter.fillPath(shape, shadow)
             painter.restore()
 
         top = QColor(pal['raised'])
         bottom = QColor(pal['surface'])
         # Front is gently lifted; rear strips darken as they curve away.
-        top.setAlpha(int((215 if intensity > .72 else 188) * intensity))
-        bottom.setAlpha(int((224 if intensity > .72 else 168) * intensity))
+        top.setAlpha(int((skin['top_alpha'] if intensity > .72 else skin['top_alpha']*.86) * intensity))
+        bottom.setAlpha(int((skin['bottom_alpha'] if intensity > .72 else skin['bottom_alpha']*.78) * intensity))
         grad = QLinearGradient(cx, y0, cx, y1)
         grad.setColorAt(0, top)
         grad.setColorAt(.43, QColor(top))
         grad.setColorAt(1, bottom)
         painter.fillPath(shape, QBrush(grad))
 
+        # Curved specular band, clipped to the projected face.
+        # Material presets change reflectivity, not drum geometry.
+        painter.save()
+        painter.setClipPath(shape)
+        sheen = QLinearGradient(face['top_left'], y0, face['top_right'], y0)
+        bright = QColor(pal['text'])
+        bright.setAlpha(int(skin['reflection'] * intensity))
+        dark = QColor(pal['bg'])
+        dark.setAlpha(int(34 * intensity))
+        clear = QColor(bright); clear.setAlpha(0)
+        sheen.setColorAt(0.0, dark)
+        sheen.setColorAt(.16, clear)
+        sheen.setColorAt(.31, bright)
+        sheen.setColorAt(.37, clear)
+        sheen.setColorAt(.77, clear)
+        sheen.setColorAt(1.0, dark)
+        painter.fillPath(shape, QBrush(sheen))
+        if skin['texture'] and abs(face['relative']) < .7:
+            # Fine horizontal brushed-metal grain (low contrast and cheap to paint).
+            grain = QColor(pal['text'])
+            grain.setAlpha(int(skin['texture'] * intensity))
+            painter.setPen(QPen(grain, .45))
+            for scan in range(int(y0) + 5, int(y1) - 2, 4):
+                painter.drawLine(QPointF(face['top_left']+10, scan),
+                                 QPointF(face['top_right']-10, scan))
+        painter.restore()
+
         # Avoid enclosing the drum in an outer window border: only facet edges.
         edge = QColor(pal['border'])
-        edge.setAlpha(int(80 * intensity))
+        edge.setAlpha(int(skin['edge'] * intensity))
         painter.setPen(QPen(edge, .7))
         painter.drawLine(QPointF(face['top_left'], y0), QPointF(face['top_right'], y0))
         painter.drawLine(QPointF(face['bottom_left'], y1), QPointF(face['bottom_right'], y1))
 
+        # The pair of fine rails catches light at the cylinder's edges.
+        rim = QColor(pal['text'])
+        rim.setAlpha(int(skin['rim'] * intensity))
+        painter.setPen(QPen(rim, .8))
+        painter.drawLine(QPointF(face['top_left'] + 3, y0+2), QPointF(face['bottom_left'] + 3, y1-2))
+        painter.drawLine(QPointF(face['top_right'] - 3, y0+2), QPointF(face['bottom_right'] - 3, y1-2))
+
         is_front = abs(face['relative']) < .52
         if is_front:
             accent = QColor(pal['accent'])
-            accent.setAlpha(int(180 * intensity))
+            accent.setAlpha(int(skin['accent'] * intensity))
             painter.setPen(QPen(accent, 2.2, Qt.SolidLine, Qt.RoundCap))
             painter.drawLine(QPointF(face['top_left'] + 8, y0 + 13),
                              QPointF(face['bottom_left'] + 8, y1 - 13))
@@ -238,39 +325,75 @@ class DrumBubble(QWidget):
                              Qt.AlignVCenter | Qt.AlignLeft, label)
         painter.restore()
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        pal = self.app.palette
-        # Never paint a full-window rounded rectangle: transparent everywhere
-        # outside the projected drum strips and floating typography.
-        painter.setFont(QFont(painter.font().family(), 10, QFont.DemiBold))
-        text_color = QColor(pal['muted'])
-        text_color.setAlpha(219)
-        painter.setPen(text_color)
-        painter.drawText(QRectF(25, 9, 260, 27),
-                         Qt.AlignVCenter | Qt.AlignLeft, self.heading)
-        painter.drawText(QRectF(292, 9, 73, 27),
-                         Qt.AlignVCenter | Qt.AlignRight, self.position)
-        if not self._entries:
+    def _paint_scene(self, painter, pal, heading, position, entries, cursor, static_mode):
+        # A floating category badge is legible even over bright desktop windows.
+        badge = QRectF(19, 5, 278, 34)
+        painter.setPen(QPen(QColor(pal['border']), .9))
+        pill = QLinearGradient(badge.left(), badge.top(), badge.left(), badge.bottom())
+        top = QColor(pal['raised']); top.setAlpha(246)
+        bottom = QColor(pal['surface']); bottom.setAlpha(240)
+        pill.setColorAt(0, top); pill.setColorAt(1, bottom)
+        painter.setBrush(QBrush(pill))
+        painter.drawRoundedRect(badge, 11, 11)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(pal['accent']))
+        painter.drawEllipse(QRectF(31, 19, 7, 7))
+        font = QFont(painter.font())
+        font.setPixelSize(13); font.setWeight(QFont.DemiBold)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+        painter.setPen(QColor(pal['text']))
+        label = metrics.elidedText(str(heading), Qt.ElideRight, 235)
+        painter.drawText(QRectF(48, 9, 237, 25), Qt.AlignVCenter | Qt.AlignLeft, label)
+
+        font.setPixelSize(11); font.setWeight(QFont.Medium)
+        painter.setFont(font)
+        painter.setPen(QColor(pal['muted']))
+        painter.drawText(QRectF(303, 10, 67, 22),
+                         Qt.AlignVCenter | Qt.AlignRight, str(position))
+        if not entries:
             return
 
-        # Soft diffuse underlay: not a rectangular popup background.
+        skin = DRUM_STYLES[self.style_name]
         halo = QRadialGradient(QPointF(195, 158), 172, QPointF(195, 158))
         glow = QColor(pal['bg'])
-        glow.setAlpha(115)
+        glow.setAlpha(skin['halo'])
         halo.setColorAt(0, glow)
         glow.setAlpha(0)
         halo.setColorAt(1, glow)
         painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(halo))
         painter.drawEllipse(QRectF(5, 38, 380, 245))
-
-        count = len(self._entries)
-        if self._static_mode:
+        if static_mode:
             faces = [face for face in visible_faces(0.0, count=1)
                      if face['relative'] == 0]
         else:
-            faces = visible_faces(self._cursor, count=count)
+            faces = visible_faces(cursor, count=len(entries))
         for face in faces:
-            self._draw_face(painter, face, self._preview(self._entries[face['index']]), pal)
+            self._draw_face(painter, face, self._preview(entries[face['index']]), pal)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        pal = self.app.palette
+        if self._category_frame is not None and self._category_progress < 1.0:
+            progress = self._category_progress
+            old_title, old_position, old_entries, old_cursor, old_static = self._category_frame
+            # Adjacent category cylinders exchange positions with a soft lateral
+            # displacement. No extra top-level windows, and rapid cycling remains safe.
+            painter.save()
+            painter.setOpacity(1.0 - progress)
+            painter.translate(-26.0 * progress, 0)
+            self._paint_scene(painter, pal, old_title, old_position,
+                              old_entries, old_cursor, old_static)
+            painter.restore()
+            painter.save()
+            painter.setOpacity(progress)
+            painter.translate(24.0 * (1.0 - progress), 0)
+            self._paint_scene(painter, pal, self.heading, self.position,
+                              self._entries, self._cursor, self._static_mode)
+            painter.restore()
+        else:
+            self._paint_scene(painter, pal, self.heading, self.position,
+                              self._entries, self._cursor, self._static_mode)
+        painter.end()
