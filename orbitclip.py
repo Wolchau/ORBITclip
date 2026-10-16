@@ -1030,7 +1030,8 @@ class MessageBubble(QFrame):
         self.customContextMenuRequested.connect(self.show_message_menu)
         self.setObjectName('chatBubble')
         theme=app.palette
-        shade = QColor(theme['accent']).darker(250).name() if own else theme['raised']
+        light=QColor(theme['bg']).lightness()>155
+        shade = (QColor(theme['accent']).lighter(260).name() if light else QColor(theme['accent']).darker(250).name()) if own else theme['raised']
         self.setStyleSheet(
             f'QFrame#chatBubble{{background:{shade};border:1px solid '+
             (QColor(theme['accent']).darker(180).name() if own else theme['border'])+
