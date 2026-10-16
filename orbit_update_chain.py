@@ -270,7 +270,10 @@ def install_chain(plan,target, on_step=None):
     backups=target/BACKUP_FOLDER
     if backups.is_symlink():
         raise UpdateError('Резервная папка является ссылкой')
-    global_backup=backups/'chains'/('v'+info['from_version']+'_to_v'+info['to_version'])
+    chains_directory=backups/'chains'
+    if chains_directory.is_symlink():
+        raise UpdateError('Папка резервных цепочек является ссылкой')
+    global_backup=chains_directory/('v'+info['from_version']+'_to_v'+info['to_version'])
     if global_backup.exists() or global_backup.is_symlink():
         raise UpdateError('Такая резервная копия уже существует')
     paths=sorted({str(safe_path(item['path'])) for manifest in chain
@@ -305,17 +308,31 @@ def install_chain(plan,target, on_step=None):
         return info['to_version']
     except BaseException:
         if applied:
-            for rel,existed in original.items():
-                dst=target/rel
-                previous=global_backup/'files'/rel
-                if existed:
-                    dst.parent.mkdir(parents=True,exist_ok=True)
-                    shutil.copy2(previous,dst)
-                elif dst.is_file():
-                    dst.unlink()
-            for intermediate in prior_backups:
-                if intermediate.exists():
-                    shutil.rmtree(intermediate)
+            try:
+                for rel,existed in original.items():
+                    dst=target/rel
+                    previous=global_backup/'files'/rel
+                    if existed:
+                        dst.parent.mkdir(parents=True,exist_ok=True)
+                        shutil.copy2(previous,dst)
+                    elif dst.is_file():
+                        dst.unlink()
+                for intermediate in prior_backups:
+                    if intermediate.exists():
+                        shutil.rmtree(intermediate)
+                # Keep the snapshot for diagnostics/recovery without blocking
+                # the user from retrying a newly downloaded chain.
+                failed=backups/'failed'
+                if failed.is_symlink():
+                    raise UpdateError('Папка аварийных копий является ссылкой')
+                failed.mkdir(exist_ok=True)
+                destination=failed/(global_backup.name+'-'+str(time.time_ns()))
+                global_backup.rename(destination)
+            except BaseException as recovery_error:
+                raise UpdateError(
+                    'Автоматическое восстановление не завершилось. '
+                    'Не запускай программу до ручной проверки резервной копии: '
+                    +str(global_backup)) from recovery_error
         raise
 
 
@@ -357,7 +374,7 @@ def apply_after_exit(plan,target,pid):
                              stderr=subprocess.DEVNULL,
                              start_new_session=os.name!='nt')
     except Exception as exc:
-        log_update('rollback','Цепочка остановлена; исходные файлы восстановлены',
+        log_update('rollback','Цепочка прервана; проверь сохранность данных и резервную копию',
                    old_version=old,new_version=new)
         _write_status(False,str(exc))
         raise
