@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QSize, QPoint, QRect, QEvent, QObject, QUrl, QStandardPaths
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QBrush, QCursor, QKeySequence, QDesktopServices, QTextLayout, QTextOption
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QBrush, QCursor, QKeySequence, QDesktopServices, QTextLayout, QTextOption, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QToolButton, QLineEdit, QScrollArea, QPlainTextEdit, QComboBox, QDialog, QMenu,
@@ -63,6 +63,7 @@ from orbit_palette import CommandPalette
 from orbit_drum_preview import DrumLivePreview
 from orbit_update_ui import UpdateWindow
 from orbit_update import consume_status
+from orbit_messenger_ui import FileReviewDialog, validate_dropped_files
 
 APP_NAME = 'ORBITclip'
 QT_CLIENT_VERSION = CLIENT_VERSION
@@ -1064,7 +1065,7 @@ class VaultWindow(QWidget):
 
 class MessageBubble(QFrame):
     """Compact Telegram-style bubble, keeping message controls within the bubble."""
-    def __init__(self, app, content, own=False, stamp='', saved_path='', sender='', on_reply=None, on_forward=None, on_delete=None):
+    def __init__(self, app, content, own=False, stamp='', saved_path='', sender='', on_reply=None, on_forward=None, on_delete=None, grouped=False):
         super().__init__();self.app=app
         self.content=content;self.own=own;self.on_reply=on_reply;self.on_forward=on_forward;self.on_delete=on_delete
         self.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1080,8 +1081,8 @@ class MessageBubble(QFrame):
         self.setMaximumWidth(475)
         self.setMinimumWidth(140)
         self.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Preferred)
-        inner=QVBoxLayout(self);inner.setContentsMargins(14,10,14,8);inner.setSpacing(4)
-        if not own and sender:
+        inner=QVBoxLayout(self);inner.setContentsMargins(14,7 if grouped else 10,14,8);inner.setSpacing(4)
+        if not own and sender and not grouped:
             who=QLabel(sender)
             who.setStyleSheet('color:'+theme['accent']+';font-size:10px;font-weight:600;')
             inner.addWidget(who)
@@ -1117,6 +1118,20 @@ class MessageBubble(QFrame):
                 info.addWidget(sub)
             line.addLayout(info,1)
             inner.addLayout(line)
+            # Local-only preview of saved attachments; no remote image fetching.
+            if file_path and file_path.is_file() and file_path.suffix.lower() in (
+                    '.png','.jpg','.jpeg','.webp','.gif'):
+                reader=QImageReader(str(file_path))
+                reader.setAutoTransform(True)
+                reader.setScaledSize(QSize(280,180))
+                if reader.canRead():
+                    image=reader.read()
+                    if not image.isNull():
+                        thumbnail=QLabel()
+                        thumbnail.setPixmap(QPixmap.fromImage(image))
+                        thumbnail.setAlignment(Qt.AlignLeft)
+                        thumbnail.setToolTip('Предпросмотр сохранённого изображения')
+                        inner.addWidget(thumbnail)
         else:
             txt=str(content.get('text',''))
             excerpt=QLabel(truncate(txt,2600))
@@ -1658,6 +1673,7 @@ class ChatWindow(QWidget):
             self.msg_layout.addStretch();return
         messages=self.app.store.fetch(place,100)
         current_date=None;found=0
+        previous_direction=None;previous_ts=0
         needle=self.search_messages.text().strip().casefold()
         channel=self.channel.currentData() or 'all'
         for record in sorted(messages,key=lambda r:(float(r.get('ts',0)),int(r.get('id',0)))):
@@ -1676,13 +1692,20 @@ class ChatWindow(QWidget):
                 day_lbl.setStyleSheet('color:#8DA6B4;font-size:10px;margin:7px 0 5px;')
                 self.msg_layout.addWidget(day_lbl);current_date=day
             own=record.get('direction')=='out'
+            direction=record.get('direction')
+            grouped=(previous_direction==direction and
+                     float(record['ts'])-previous_ts<=300 and
+                     float(record['ts'])>=previous_ts)
+            previous_direction=direction
+            previous_ts=float(record['ts'])
             wrap=QHBoxLayout();wrap.setSpacing(0)
             if own:wrap.addStretch(1)
             sender=(self.app.identity.trusted.get(self.app.selected_peer,{}).get('name','Устройство') if not own else '')
             bubble=MessageBubble(self.app,content,own,datetime.fromtimestamp(record['ts']).strftime('%H:%M'),
                                  saved_path=record.get('saved_path',''),sender=sender,
                                  on_reply=self.reply_to_message,on_forward=self.forward_message,
-                                 on_delete=lambda loc=place,mid=record['id']:self.delete_message(loc,mid))
+                                 on_delete=lambda loc=place,mid=record['id']:self.delete_message(loc,mid),
+                                 grouped=grouped)
             wrap.addWidget(bubble)
             if not own:wrap.addStretch(1)
             row=QWidget();row.setLayout(wrap)
@@ -1749,14 +1772,18 @@ class ChatWindow(QWidget):
     def send_files(self,paths):
         if self.app.offline:return error(self,'В настройках включён режим оффлайн')
         if not self.app.active_channel()[0]:return error(self,'Сначала выбери получателя')
+        valid,rejected=validate_dropped_files(paths)
+        if not valid:
+            return error(self,'Нет подходящих файлов. Максимальный размер каждого — 3 МБ.')
+        review=FileReviewDialog(valid,rejected,self)
+        if review.exec()!=QDialog.Accepted:
+            return
         sent=0
-        for path in list(paths)[:10]:
-            file=Path(path)
+        for file,_ in valid:
             try:
-                if not file.is_file():continue
-                size=file.stat().st_size
-                if size>MAX_FILE_SIZE:
-                    error(self,f'«{file.name}»: превышен лимит 3 МБ')
+                # Revalidate after confirmation, before reading changed files.
+                if not file.is_file() or file.stat().st_size>MAX_FILE_SIZE:
+                    error(self,f'«{file.name}»: файл изменён или слишком велик')
                     continue
                 raw=file.read_bytes()
                 if len(raw)>MAX_FILE_SIZE:continue
@@ -1768,7 +1795,7 @@ class ChatWindow(QWidget):
                 'bytes':base64.b64encode(raw).decode('ascii')})
             if not ok:break
             sent+=1
-        if sent:self.app.toast.pop(f'Отправляется файлов: {sent}')
+        if sent:self.app.toast.pop(f'Отправлено в очередь передачи: {sent}')
 
     def dragEnterEvent(self,event):
         if event.mimeData().hasUrls() and any(u.isLocalFile() for u in event.mimeData().urls()):
