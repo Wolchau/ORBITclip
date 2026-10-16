@@ -48,7 +48,7 @@ class FlowTests(unittest.TestCase):
         self.assertIn('def dragEnterEvent(self,event):',CORE)
         self.assertIn('def dropEvent(self,event):',CORE)
         self.assertIn('def send_files(self,paths):',CORE)
-        self.assertIn('if size>MAX_FILE_SIZE:',CORE)
+        self.assertIn('if not file.is_file() or file.stat().st_size>MAX_FILE_SIZE:',CORE)
         self.assertIn("self.app.send_to_active({",CORE)
 
 
