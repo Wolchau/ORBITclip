@@ -91,7 +91,7 @@ def bundle(version):
     manifest={'schema':1,'app':'ORBITclip','version':version,'files':packaged}
     with ZipFile(out,'a',compression=ZIP_DEFLATED,compresslevel=9) as z:
         z.writestr('ORBITclip/update-manifest.json',
-                   json.dumps(manifest,ensure_ascii=False,sort_keys=True,indent=2)+'\\n')
+                   json.dumps(manifest,ensure_ascii=False,sort_keys=True,indent=2)+'\n')
     print(out.name,out.stat().st_size,'bytes,',len(root_files),'root files')
 
 # Exactly the files shipped by bundle(), less machine-specific configuration.
