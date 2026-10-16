@@ -49,6 +49,40 @@ class QtFlowTests(unittest.TestCase):
         finally:
             w.close();app.clock.close()
 
+    def test_composer_accepts_local_file_drop(self):
+        # Extract the Qt component without importing unrelated network modules.
+        import ast
+        from pathlib import Path
+        from PySide6.QtWidgets import QPlainTextEdit
+        source=(Path(__file__).parent/'orbitclip.py').read_text('utf-8')
+        tree=ast.parse(source)
+        node=next(x for x in tree.body if isinstance(x,ast.ClassDef) and x.name=='ChatComposer')
+        scope={'QPlainTextEdit':QPlainTextEdit,'Qt':Qt}
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[node],type_ignores=[])),
+                     '<ChatComposer>','exec'),scope)
+        received=[]
+        composer=scope['ChatComposer'](lambda:None,file_callback=received.append)
+        class URL:
+            def isLocalFile(self):return True
+            def toLocalFile(self):return '/tmp/test-file.txt'
+        class MIME:
+            def hasUrls(self):return True
+            def urls(self):return [URL()]
+        class Event:
+            def __init__(self):self.accepted=False
+            def mimeData(self):return MIME()
+            def acceptProposedAction(self):self.accepted=True
+        try:
+            first=Event()
+            composer.dragEnterEvent(first)
+            self.assertTrue(first.accepted)
+            second=Event()
+            composer.dropEvent(second)
+            self.assertTrue(second.accepted)
+            self.assertEqual(received,[['/tmp/test-file.txt']])
+        finally:
+            composer.close()
+
     def test_material_styles_really_change_pixels(self):
         from orbit_drum import DrumBubble
         from orbit_drum_styles import DRUM_STYLES
