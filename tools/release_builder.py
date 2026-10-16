@@ -59,7 +59,7 @@ def bundle(version):
     root_files=[p for p in root_files if p.is_file()]
     with ZipFile(out,'w',compression=ZIP_DEFLATED,compresslevel=9) as z:
         for p in root_files:
-            arcname=str(Path('ORBITclip')/p.name)
+            arcname=(Path('ORBITclip')/p.name).as_posix()
             if p.name=='client_defaults.json':
                 cfg=json.loads(p.read_text(encoding='utf-8'))
                 # An initial-install archive must never ship embedded relay credentials.
@@ -73,7 +73,7 @@ def bundle(version):
             for p in files_in(asset_dir):
                 if p.suffix.lower() not in ('.png','.svg','.ico','.icns','.gif','.jpg','.jpeg','.webp'):
                     continue
-                add_zip_member(z,p,str(Path('ORBITclip')/p.relative_to(ROOT)))
+                add_zip_member(z,p,(Path('ORBITclip')/p.relative_to(ROOT)).as_posix())
     # The complete archive is the future one-hop update payload. Its manifest
     # describes ONLY managed program files, never client_defaults.json.
     packaged = {}
