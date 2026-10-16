@@ -68,6 +68,40 @@ def bundle(version):
                 add_zip_member(z,p,arcname=str(Path('ORBITclip_Patch_v'+version.replace('.','_'))/p.relative_to(patch)))
         print(dest.name,dest.stat().st_size)
 
+
+def incremental_patch(version):
+    """Build only changed client modules since the preceding version."""
+    import subprocess
+    oldtag='v7.4.2'
+    def git(*args):
+        return subprocess.run(['git',*args],cwd=ROOT,check=True,capture_output=True).stdout
+    try:
+        changes=git('diff','--name-status',oldtag,'HEAD').decode().splitlines()
+    except (OSError,subprocess.CalledProcessError):
+        print('Previous tag unavailable; incremental patch skipped')
+        return
+    allowed={'.py','.json','.txt','.md','.command','.bat','.svg','.png','.ico','.icns','.gif'}
+    records=[]; contents={}
+    for line in changes:
+        columns=line.split(chr(9))
+        status=columns[0][0]
+        if status not in ('A','M','D') or len(columns)!=2: continue
+        rel=Path(columns[1])
+        if rel.parts[0] in ('.github','tools','docs','patches','dist') or rel.suffix.lower() not in allowed: continue
+        before=hashlib.sha256(git('show',oldtag+':'+rel.as_posix())).hexdigest() if status!='A' else None
+        body=(ROOT/rel).read_bytes() if status!='D' else None
+        after=hashlib.sha256(body).hexdigest() if body is not None else None
+        records.append({'path':rel.as_posix(),'before':before,'after':after})
+        if body is not None: contents[rel.as_posix()]=body
+    prefix='ORBITclip_Patch_v'+version.replace('.','_')+'/'
+    output=ROOT/'dist'/(prefix.rstrip('/')+'.zip')
+    manifest={'app':'ORBITclip','from_version':'7.4.2','to_version':version,'changes':records}
+    with ZipFile(output,'w',compression=ZIP_DEFLATED,compresslevel=9) as z:
+        z.writestr(prefix+'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
+        z.write(ROOT/'tools'/'patch_installer.py',prefix+'apply_patch.py')
+        for path,body in contents.items(): z.writestr(prefix+'payload/'+path,body)
+    print(output.name,output.stat().st_size,'bytes,',len(records),'files')
+
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--check-only',action='store_true')
@@ -75,4 +109,6 @@ if __name__=='__main__':
     check_security()
     v=version()
     print('Checked version',v,'test credential policy')
-    if not args.check_only:bundle(v)
+    if not args.check_only:
+        bundle(v)
+        incremental_patch(v)
