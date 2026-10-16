@@ -69,7 +69,11 @@ def list_releases(current, token=None):
 
 def inspect_zip_manifest(archive):
     """Read just manifest for dependency graph; full ZIP validation comes later."""
+    if Path(archive).stat().st_size > 12_000_000:
+        raise UpdateError('Слишком большой архив патча')
     with ZipFile(archive) as z:
+        if len(z.infolist())>120 or sum(e.file_size for e in z.infolist())>24_000_000:
+            raise UpdateError('Архив превышает лимит распаковки')
         paths = [name for name in z.namelist() if name.endswith('/manifest.json')]
         if len(paths) != 1:
             raise UpdateError('Неверный состав ZIP-патча')
@@ -167,6 +171,8 @@ def prepare_chain_from_archives(current, target, archives, destination):
             folder.mkdir()
             # Extract ONLY manifest and named payload bytes, never ZIP scripts.
             with ZipFile(archive) as z:
+                if len(z.infolist())>120 or sum(e.file_size for e in z.infolist())>24_000_000:
+                    raise UpdateError('Архив превышает лимит распаковки')
                 prefix='ORBITclip_Patch_v'+manifest['to_version'].replace('.','_')+'/'
                 if prefix+'manifest.json' not in z.namelist():
                     raise UpdateError('Неверная структура ZIP')
@@ -264,7 +270,7 @@ def install_chain(plan,target, on_step=None):
     backups=target/BACKUP_FOLDER
     if backups.is_symlink():
         raise UpdateError('Резервная папка является ссылкой')
-    global_backup=backups/('v'+info['from_version']+'_to_v'+info['to_version'])
+    global_backup=backups/'chains'/('v'+info['from_version']+'_to_v'+info['to_version'])
     if global_backup.exists() or global_backup.is_symlink():
         raise UpdateError('Такая резервная копия уже существует')
     paths=sorted({str(safe_path(item['path'])) for manifest in chain
