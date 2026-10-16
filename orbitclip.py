@@ -1917,7 +1917,9 @@ class PreferencesWindow(QWidget):
         self.refresh_status()
 
     def refresh_status(self):
-        self.status.setText('Сеть отключена' if self.app.offline else 'Сеть включена')
+        network='Сеть отключена' if self.app.offline else 'Сеть включена'
+        remaining=max(0,round((self.app.private_until-time.monotonic())/60))
+        self.status.setText(network+(f' · Буфер на паузе ~{remaining} мин' if remaining else ''))
 
 class OrbitApp:
     def __init__(self):
@@ -2081,6 +2083,8 @@ class OrbitApp:
         history.setToolTip('ORBITclip · Буфер обмена')
         hm=QMenu()
         hm.addAction('Открыть историю',lambda checked=False:self.open_history())
+        hm.addAction('⌕ Быстрый поиск',lambda checked=False:self.open_palette())
+        hm.addAction('Вставить следующий',lambda checked=False:self.paste_next_from_queue())
         hm.addAction('Пространства',lambda checked=False:self.open_workspaces())
         hm.addAction('Уведомления',lambda checked=False:self.open_notification_center())
         hm.addAction('Моя аналитика',lambda checked=False:self.open_analytics())
@@ -2157,6 +2161,7 @@ class OrbitApp:
 
     def open_settings(self):
         if self.preferences is None:self.preferences=PreferencesWindow(self)
+        self.preferences.exclusions.setText(', '.join(self.excluded_apps))
         self.preferences.offline.blockSignals(True)
         self.preferences.paste.blockSignals(True)
         self.preferences.offline.setChecked(self.offline)
@@ -2182,6 +2187,8 @@ class OrbitApp:
         tray.setToolTip('ORBITclip · История и обмен')
         menu=QMenu()
         menu.addAction('История буфера',lambda checked=False:self.open_history())
+        menu.addAction('⌕ Быстрый поиск',lambda checked=False:self.open_palette())
+        menu.addAction('Вставить следующий',lambda checked=False:self.paste_next_from_queue())
         menu.addAction('Переписка',lambda checked=False:self.open_chat())
         menu.addAction('Устройства онлайн',lambda checked=False:self.open_online())
         menu.addAction('Общие пространства',lambda checked=False:self.open_workspaces())
@@ -2305,6 +2312,7 @@ class OrbitApp:
         duration=max(0,min(1440,int(minutes)))
         self.private_until=time.monotonic()+duration*60 if duration else 0.0
         self.toast.pop(f'Запись буфера приостановлена на {duration} минут' if duration else 'Запись возобновлена')
+        if self.preferences:self.preferences.refresh_status()
 
     def open_palette(self):
         if self.flow_palette is None:self.flow_palette=CommandPalette(self)
