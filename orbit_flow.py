@@ -74,7 +74,7 @@ class PasteQueue:
                 return True
         return False
 
-    def merge(self, uids, delimiter='\\n'):
+    def merge(self, uids, delimiter='\n'):
         """Merge selected fragments in QUEUE order; no auto clipboard mutation."""
         selected = set(uids)
         if len(selected) < 2:
@@ -112,7 +112,7 @@ class PasteQueue:
         self.completed=0
 
     def preview(self):
-        return [x['text'].replace('\\n', ' ↵ ')[:95] for x in self._items]
+        return [x['text'].replace('\n', ' ↵ ')[:95] for x in self._items]
 
 
 class QueuePresets:
