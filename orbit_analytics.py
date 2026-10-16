@@ -29,6 +29,9 @@ class AnalyticsStore:
         self.db.execute('''CREATE TABLE IF NOT EXISTS counters (
             day TEXT NOT NULL, event TEXT NOT NULL, source TEXT NOT NULL,
             count INTEGER NOT NULL, PRIMARY KEY(day,event,source))''')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS text_stats (
+            day TEXT NOT NULL, metric TEXT NOT NULL, count INTEGER NOT NULL,
+            PRIMARY KEY(day,metric))''')
         self.db.commit()
         self.prune()
 
@@ -40,6 +43,46 @@ class AnalyticsStore:
         self.db.execute('''INSERT INTO counters(day,event,source,count) VALUES(?,?,?,1)
            ON CONFLICT(day,event,source) DO UPDATE SET count=count+1''',(day,event,source))
         self.db.commit()
+
+    def record_text(self, value, now=None):
+        """Store aggregate character classes, never raw clipboard text."""
+        if not self.enabled or not isinstance(value, str) or not value:
+            return
+        from collections import Counter
+        day=datetime.fromtimestamp(float(now if now is not None else time.time())).date().isoformat()
+        counts=Counter()
+        for ch in value:
+            if 'А' <= ch <= 'я' or ch in 'Ёё':
+                counts['russian'] += 1
+            elif ('A' <= ch <= 'Z') or ('a' <= ch <= 'z'):
+                counts['latin'] += 1
+            elif ch.isdigit():
+                counts['digits'] += 1
+            elif not ch.isspace():
+                counts['symbols'] += 1
+        counts['chars'] = len(value)
+        counts['lines'] = value.count('\n') + 1
+        # Exact keyword occurrence count only; no other words are retained.
+        import re
+        counts['word_select'] = len(re.findall(r'\bselect\b', value, re.IGNORECASE))
+        self.db.executemany('''INSERT INTO text_stats(day,metric,count) VALUES(?,?,?)
+            ON CONFLICT(day,metric) DO UPDATE SET count=count+excluded.count''',
+            ((day,key,int(n)) for key,n in counts.items() if n))
+        self.db.commit()
+
+    def text_summary(self, days=30, now=None):
+        days=max(1,min(365,int(days)))
+        today=datetime.fromtimestamp(float(now)).date() if now is not None else datetime.now().date()
+        first=(today-timedelta(days=days-1)).isoformat()
+        rows=self.db.execute('SELECT metric,SUM(count) FROM text_stats WHERE day>=? GROUP BY metric',(first,)).fetchall()
+        totals=dict(rows)
+        today_select=self.db.execute("SELECT count FROM text_stats WHERE day=? AND metric='word_select'",
+            (today.isoformat(),)).fetchone()
+        last_week=today-timedelta(days=7)
+        previous=self.db.execute("SELECT count FROM text_stats WHERE day=? AND metric='word_select'",
+            (last_week.isoformat(),)).fetchone()
+        return {'totals':totals,'select_today':today_select[0] if today_select else 0,
+                'select_last_week':previous[0] if previous else 0}
 
     def summary(self, days=30, now=None):
         days=max(1,min(365,int(days)))
@@ -63,9 +106,14 @@ class AnalyticsStore:
 
     def prune(self, now=None):
         today=datetime.fromtimestamp(float(now)).date() if now is not None else datetime.now().date()
-        self.db.execute('DELETE FROM counters WHERE day<?', ((today-timedelta(days=365)).isoformat(),));self.db.commit()
+        cutoff=(today-timedelta(days=365)).isoformat()
+        self.db.execute('DELETE FROM counters WHERE day<?', (cutoff,))
+        self.db.execute('DELETE FROM text_stats WHERE day<?', (cutoff,))
+        self.db.commit()
 
     def reset(self):
-        self.db.execute('DELETE FROM counters');self.db.commit()
+        self.db.execute('DELETE FROM counters')
+        self.db.execute('DELETE FROM text_stats')
+        self.db.commit()
 
     def close(self):self.db.close()
