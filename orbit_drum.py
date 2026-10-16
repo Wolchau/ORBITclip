@@ -253,11 +253,14 @@ class DrumBubble(QWidget):
 
         material=skin['material']
         if material=='glass':
-            top=QColor('#497F94');bottom=QColor('#152F43')
+            top=QColor(pal['accent']).lighter(115)
+            bottom=QColor(pal['raised']).darker(125)
         elif material=='metal':
-            top=QColor('#A7B2BC');bottom=QColor('#465563')
+            top=QColor(pal['muted']).lighter(137)
+            bottom=QColor(pal['raised'])
         elif material=='obsidian':
-            top=QColor('#292438');bottom=QColor('#080D18')
+            top=QColor(pal['raised']).darker(130)
+            bottom=QColor(pal['bg']).darker(180)
         else:
             top=QColor(pal['raised']);bottom=QColor(pal['surface'])
         # Front is gently lifted; rear strips darken as they curve away.
@@ -274,7 +277,7 @@ class DrumBubble(QWidget):
         painter.save()
         painter.setClipPath(shape)
         sheen = QLinearGradient(face['top_left'], y0, face['top_right'], y0)
-        bright = QColor(skin['highlight'])
+        bright = QColor(pal['accent'] if material != 'metal' else pal['text'])
         bright.setAlpha(int(skin['reflection'] * intensity))
         dark = QColor(pal['bg'])
         dark.setAlpha(int(34 * intensity))
@@ -344,7 +347,7 @@ class DrumBubble(QWidget):
         elif material=='obsidian':
             painter.save()
             painter.setClipPath(shape)
-            accent=QColor(skin['highlight'])
+            accent=QColor(pal['accent'])
             accent.setAlpha(int(215*intensity))
             painter.setPen(QPen(accent,2.1,Qt.SolidLine,Qt.RoundCap))
             painter.drawLine(QPointF(face['top_right']-11,y0+9),
@@ -369,8 +372,8 @@ class DrumBubble(QWidget):
         font.setStretch(round(100*390/self.width()))
         font.setWeight(QFont.DemiBold if is_front else QFont.Normal)
         painter.setFont(font)
-        fg = QColor('#0E202B' if material=='metal' and is_front else
-                    '#F0F6F9' if material in ('glass','obsidian') and is_front else
+        fg = QColor('#11202A' if material=='metal' and is_front else
+                    '#F0F6F9' if material=='obsidian' and is_front else
                     pal['text'] if is_front else pal['muted'])
         fg.setAlpha(int((247 if is_front else 195) * intensity))
         painter.setPen(fg)
