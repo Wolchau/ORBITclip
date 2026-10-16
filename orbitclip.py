@@ -60,6 +60,9 @@ from orbit_select import OrbitSelect
 from orbit_flow import PasteQueue, normalize_exclusions, is_excluded
 from orbit_global_shortcuts import FlowShortcuts
 from orbit_palette import CommandPalette
+from orbit_drum_preview import DrumLivePreview
+from orbit_update_ui import UpdateWindow
+from orbit_update import consume_status
 
 APP_NAME = 'ORBITclip'
 QT_CLIENT_VERSION = CLIENT_VERSION
@@ -1934,6 +1937,7 @@ class PreferencesWindow(QWidget):
         lay.addWidget(self.drum_index)
 
         self.drum_sliders=[]
+        self.drum_sliders_by_key={}
         def drum_slider(caption,key,low,high,suffix=''):
             line=QHBoxLayout()
             label_text=QLabel(caption)
@@ -1951,6 +1955,7 @@ class PreferencesWindow(QWidget):
                 lambda n,k=key,v=value,unit=suffix:(v.setText(str(n)+unit),app.set_drum_option(k,n)))
             lay.addLayout(line)
             self.drum_sliders.append(slider)
+            self.drum_sliders_by_key[key]=(slider,value,suffix)
         drum_slider('Прозрачность барабана','opacity',35,100,'%')
         drum_slider('Видимость соседей','neighbor_opacity',5,100,'%')
         drum_slider('Боковой отступ соседей','neighbor_gap',0,65,' px')
@@ -1962,6 +1967,13 @@ class PreferencesWindow(QWidget):
             for widget in self.drum_controls:widget.setEnabled(active)
         self.wheel_view.currentIndexChanged.connect(sync_drum_controls)
         sync_drum_controls()
+        lay.addWidget(label('Визуальная настройка барабана'))
+        self.drum_live=DrumLivePreview(app,self)
+        lay.addWidget(self.drum_live)
+        preview_buttons=QHBoxLayout()
+        preview_buttons.addWidget(action('Вернуть настройки барабана',self.reset_drum_settings))
+        preview_buttons.addStretch(1)
+        lay.addLayout(preview_buttons)
         lay.addWidget(label('Приватность буфера'))
         self.exclusions=QLineEdit(', '.join(app.excluded_apps))
         self.exclusions.setPlaceholderText('Приложения: 1Password, KeePassXC, …')
@@ -1985,6 +1997,7 @@ class PreferencesWindow(QWidget):
         shortcuts=QHBoxLayout()
         shortcuts.addWidget(action('Уведомления…',app.open_notification_center))
         shortcuts.addWidget(action('Моя аналитика…',app.open_analytics))
+        shortcuts.addWidget(action('Обновления…',app.open_updates))
         lay.addLayout(shortcuts)
         self.status=label('')
         lay.addWidget(self.status)
@@ -1994,6 +2007,43 @@ class PreferencesWindow(QWidget):
         self.offline.toggled.connect(app.set_offline)
         self.paste.toggled.connect(app.set_paste_on_release)
         self.refresh_status()
+
+    def refresh_drum_preview(self):
+        if hasattr(self,'drum_live'):
+            self.drum_live.repaint_example()
+
+    def reset_drum_settings(self):
+        from orbit_drum_styles import normalize_drum_style
+        from orbit_drum_layout import DEFAULTS
+        self.app.drum_options=dict(DEFAULTS)
+        self.app.set_drum_style('minimal')
+        if isinstance(self.app.bubble,DrumBubble):
+            self.app.bubble.set_options(self.app.drum_options)
+        self.drum_shape.blockSignals(True)
+        self.drum_shape.setCurrentIndex(self.drum_shape.findData(DEFAULTS['shape']))
+        self.drum_shape.blockSignals(False)
+        self.drum_position.blockSignals(True)
+        self.drum_position.setCurrentIndex(self.drum_position.findData(DEFAULTS['position']))
+        self.drum_position.blockSignals(False)
+        self.drum_header.blockSignals(True)
+        self.drum_header.setCurrentIndex(self.drum_header.findData(DEFAULTS['header']))
+        self.drum_header.blockSignals(False)
+        self.drum_header_place.blockSignals(True)
+        self.drum_header_place.setCurrentIndex(self.drum_header_place.findData(DEFAULTS['header_position']))
+        self.drum_header_place.blockSignals(False)
+        self.drum_index.blockSignals(True)
+        self.drum_index.setChecked(DEFAULTS['show_index'])
+        self.drum_index.blockSignals(False)
+        self.drum_skin.blockSignals(True)
+        self.drum_skin.setCurrentIndex(self.drum_skin.findData('minimal'))
+        self.drum_skin.blockSignals(False)
+        for key,(slider,value,suffix) in self.drum_sliders_by_key.items():
+            slider.blockSignals(True)
+            slider.setValue(DEFAULTS[key])
+            slider.blockSignals(False)
+            value.setText(str(DEFAULTS[key])+suffix)
+        self.app.save_settings()
+        self.refresh_drum_preview()
 
     def refresh_status(self):
         network='Сеть отключена' if self.app.offline else 'Сеть включена'
@@ -2063,13 +2113,14 @@ class OrbitApp:
         self._last_clip=''
         self.clipboard=self.qt.clipboard();self.clipboard.dataChanged.connect(self.on_clipboard)
         self.toast=FloatingToast()
+        self._last_update_status=consume_status()
         self.wheel_view=str(self.settings.get('wheel_view','compact'))
         self.drum_style=normalize_drum_style(self.settings.get('drum_style','minimal'))
         self.drum_options=normalize_drum_options(self.settings.get('drum_options'))
         self.animate_drum_categories=bool(self.settings.get('animate_drum_categories',True))
         self.bubble=DrumBubble(self) if self.wheel_view=='drum' else ScrollBubble()
         self.flow_palette=None
-        self.history=None;self.chat=None;self.online_window=None;self.preferences=None;self.workspace_window=None;self.sql_explorer=None;self.capture_window=None;self.screenshot_editor=None;self.notification_window=None;self.analytics_window=None
+        self.history=None;self.chat=None;self.online_window=None;self.preferences=None;self.update_window=None;self.workspace_window=None;self.sql_explorer=None;self.capture_window=None;self.screenshot_editor=None;self.notification_window=None;self.analytics_window=None
         self.tour_seen=bool(self.settings.get('tour_seen',False))
         raw_unread=self.settings.get('unread_peers',{})
         self.unread_peers={str(k):max(0,int(v)) for k,v in raw_unread.items() if isinstance(k,str) and isinstance(v,int) and not isinstance(v,bool)} if isinstance(raw_unread,dict) else {}
@@ -2094,6 +2145,9 @@ class OrbitApp:
         self.restore_remote()
         self.start_peer_bridges()
         self.save_settings()
+        if self._last_update_status:
+            result=self._last_update_status
+            QTimer.singleShot(1300,lambda:self.toast.pop(result['message']))
 
     def ensure_nickname(self):
         if self.identity.name_confirmed and self.identity.name.strip():
@@ -2134,6 +2188,7 @@ class OrbitApp:
         if isinstance(self.bubble,DrumBubble):
             self.bubble.set_options(validated)
         self.save_settings()
+        if self.preferences:self.preferences.refresh_drum_preview()
 
     def set_drum_style(self,style):
         value=normalize_drum_style(style)
@@ -2141,6 +2196,7 @@ class OrbitApp:
         self.drum_style=value
         if isinstance(self.bubble,DrumBubble):self.bubble.set_style(value)
         self.save_settings()
+        if self.preferences:self.preferences.refresh_drum_preview()
 
     def set_animate_drum_categories(self,enabled):
         self.animate_drum_categories=bool(enabled)
@@ -2158,6 +2214,7 @@ class OrbitApp:
         for widget in self.qt.allWidgets():
             if isinstance(widget,OrbitSelect):widget.set_theme(value)
         if isinstance(self.bubble,DrumBubble):self.bubble.update()
+        if self.preferences:self.preferences.refresh_drum_preview()
         if self.chat:
             self.chat.apply_theme()
             if self.chat.isVisible() and self.chat.pages.currentIndex()==0:
@@ -2184,6 +2241,7 @@ class OrbitApp:
         hm.addAction('Моя аналитика',lambda checked=False:self.open_analytics())
         hm.addSeparator()
         hm.addAction('Настройки…',lambda checked=False:self.open_settings())
+        hm.addAction('Обновления…',lambda checked=False:self.open_updates())
         self.tray_clock_action=hm.addAction('Скрыть виджет часов',lambda checked=False:self.set_clock_hidden_windows(not self.hide_clock_windows))
         hm.addSeparator()
         hm.addAction('Завершить ORBITclip',lambda checked=False:self.shutdown())
@@ -2253,6 +2311,13 @@ class OrbitApp:
         self.analytics_window.refresh()
         self.analytics_window.show();self.analytics_window.raise_();self.analytics_window.activateWindow()
 
+    def open_updates(self):
+        if self.update_window is None:
+            self.update_window=UpdateWindow(self)
+        self.update_window.show()
+        self.update_window.raise_()
+        self.update_window.activateWindow()
+
     def open_settings(self):
         if self.preferences is None:self.preferences=PreferencesWindow(self)
         self.preferences.exclusions.setText(', '.join(self.excluded_apps))
@@ -2267,6 +2332,7 @@ class OrbitApp:
             self.preferences.hide_clock.setChecked(self.hide_clock_windows)
             self.preferences.hide_clock.blockSignals(False)
         self.preferences.refresh_status()
+        self.preferences.refresh_drum_preview()
         self.preferences.show();self.preferences.raise_();self.preferences.activateWindow()
 
     def create_windows_tray(self):
@@ -2291,6 +2357,7 @@ class OrbitApp:
         menu.addSeparator()
         menu.addAction('SQL Explorer…',lambda checked=False:self.open_sql_explorer())
         menu.addAction('Настройки…',lambda checked=False:self.open_settings())
+        menu.addAction('Проверить обновления…',lambda checked=False:self.open_updates())
         self.tray_clock_action=menu.addAction('Показать виджет часов',lambda checked=False:self.set_clock_hidden_windows(not self.hide_clock_windows))
         menu.addSeparator()
         menu.addAction('Завершить ORBITclip',lambda checked=False:self.shutdown())
