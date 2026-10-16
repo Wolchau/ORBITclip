@@ -18,16 +18,16 @@ ROOT=Path(__file__).parent
 
 
 class DefaultsTests(unittest.TestCase):
-    def test_package_contains_explicit_url_and_token(self):
+    def test_package_has_url_but_no_embedded_token(self):
         initial=load_connection_defaults(ROOT/'client_defaults.json')
         self.assertEqual(initial['https_url'],'https://kinetic-relay.onrender.com')
-        self.assertGreaterEqual(len(initial['https_token']),32)
+        self.assertFalse(initial.get('https_token'))
 
     def test_new_user_gets_default_connection(self):
         url,token=resolve_connection_settings({},ROOT/'client_defaults.json','https://fallback.example')
         initial=load_connection_defaults(ROOT/'client_defaults.json')
         self.assertEqual(url,initial['https_url'])
-        self.assertEqual(token,initial['https_token'])
+        self.assertEqual(token,'')
 
     def test_existing_user_values_win(self):
         url,token=resolve_connection_settings({'https_url':'https://my-relay.test','https_token':'own-private-token'},ROOT/'client_defaults.json','x')
@@ -36,7 +36,7 @@ class DefaultsTests(unittest.TestCase):
     def test_empty_settings_get_filled(self):
         url,token=resolve_connection_settings({'https_url':'','https_token':''},ROOT/'client_defaults.json','x')
         self.assertEqual(url,'https://kinetic-relay.onrender.com')
-        self.assertTrue(token)
+        self.assertEqual(token,'')
 
     def test_invalid_defaults_are_ignored(self):
         with tempfile.TemporaryDirectory() as d:
