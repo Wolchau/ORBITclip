@@ -1,6 +1,7 @@
 """Offline, three-release updater regression; no internet or user state."""
 import hashlib
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -124,6 +125,28 @@ class ChainTests(unittest.TestCase):
         # A successful rollback must not permanently block a user retry.
         self.assertEqual(install_chain(plan,self.app),'7.9.3')
         self.assertEqual(read_version(self.app),'7.9.3')
+
+    def test_download_orchestration_and_cleanup_with_skipped_versions(self):
+        import orbit_update_chain
+        releases=[
+            {'version':v,'url':'https://api.github.com/repos/Wolchau/ORBITclip/releases/assets/'+str(n),
+             'size':archive.stat().st_size,'digest':''}
+            for n,(v,archive) in enumerate(zip(['7.8.2','7.8.4','7.9.3'],self.patches),1)
+        ]
+        temp_folders=[]
+        def mocked_download(item,token=None,progress=None):
+            directory=Path(tempfile.mkdtemp(prefix='download-test-'))
+            temp_folders.append(directory)
+            destination=directory/'update.zip'
+            shutil.copy2(self.patches[['7.8.2','7.8.4','7.9.3'].index(item['version'])],destination)
+            if progress:progress(destination.stat().st_size,destination.stat().st_size)
+            return destination
+        with patch.object(orbit_update_chain,'download_release',side_effect=mocked_download):
+            plan,manifests=orbit_update_chain.download_and_prepare(releases,self.app)
+        self.assertEqual([x['to_version'] for x in manifests],['7.8.2','7.8.4','7.9.3'])
+        self.assertEqual(read_version(self.app),'7.8.1')
+        self.assertTrue(all(not folder.exists() for folder in temp_folders))
+        self.assertEqual(install_chain(plan,self.app),'7.9.3')
 
     def test_route_uses_manifest_dependencies_not_sorted_versions(self):
         manifests=[({'from_version':'7.8.1','to_version':'7.8.2'},'a'),
