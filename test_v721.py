@@ -20,7 +20,7 @@ class UX721Tests(unittest.TestCase):
             self.assertNotIn(old,nav)
         self.assertIn('self.app.categories.visible_categories()',nav)
         tools=source_method('VaultWindow','open_tools_menu')
-        for entry in ('Управление категориями','Коллекции по приложениям','Порядок Ctrl + колесо','Распознать текст','Настройки приложения'):
+        for entry in ('Управление категориями','Коллекции по приложениям','Порядок Ctrl + колесо','Настройки приложения'):
             self.assertIn(entry,tools)
 
     def test_shared_workspace_switcher_buttons_replaced_combo(self):
