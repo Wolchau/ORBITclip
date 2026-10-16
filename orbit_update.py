@@ -55,24 +55,27 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def _headers(*, binary=False):
+def _headers(*, binary=False, token=None):
     header = {"User-Agent": "ORBITclip-updater/1.0",
               "Accept": "application/octet-stream" if binary else "application/vnd.github+json",
               "X-GitHub-Api-Version": "2022-11-28"}
     # Used only from the environment, never stored in settings/logs.
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    token = token or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if token:
+        token = str(token).strip()
+        if "\\r" in token or "\\n" in token:
+            raise UpdateError("Некорректный токен")
         header["Authorization"] = "Bearer " + token
     return header
 
 
-def _get_bytes(url, binary=False, maximum=MAX_ARCHIVE):
+def _get_bytes(url, binary=False, maximum=MAX_ARCHIVE, token=None):
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != "https" or parts.hostname not in ("api.github.com",
                                                            "github.com",
                                                            "release-assets.githubusercontent.com"):
         raise UpdateError("Недопустимый адрес загрузки")
-    request = urllib.request.Request(url, headers=_headers(binary=binary))
+    request = urllib.request.Request(url, headers=_headers(binary=binary, token=token))
     try:
         with urllib.request.urlopen(request, timeout=18) as response:
             data = response.read(maximum + 1)
@@ -83,9 +86,9 @@ def _get_bytes(url, binary=False, maximum=MAX_ARCHIVE):
     return data
 
 
-def latest_release(current):
+def latest_release(current, token=None):
     """Return verified GitHub metadata, not a guessed download URL."""
-    data = json.loads(_get_bytes(API + "/releases/latest", maximum=1_000_000))
+    data = json.loads(_get_bytes(API + "/releases/latest", maximum=1_000_000, token=token))
     tag = str(data.get("tag_name", "")).removeprefix("v")
     if version_tuple(tag) <= version_tuple(current):
         return None
@@ -100,13 +103,13 @@ def latest_release(current):
     }
 
 
-def download_release(release):
+def download_release(release, token=None):
     url = release.get("url")
     if not url:
         raise UpdateError("Для релиза не опубликован патч. Доступна ручная установка.")
     if not url.startswith(API + "/releases/assets/"):
         raise UpdateError("Адрес ZIP не принадлежит официальному релизу")
-    result = _get_bytes(url, binary=True)
+    result = _get_bytes(url, binary=True, token=token)
     expected = release.get("digest", "")
     if expected.startswith("sha256:") and digest(result) != expected[7:].lower():
         raise UpdateError("Контрольная сумма загруженного архива не совпала")
