@@ -35,6 +35,7 @@ class ClipboardWheel:
         self._mac_status = ""
         self.keyboard = None
         self.mouse = None
+        self.activation_mode = 'wheel'
         self._win_ctrl = False
         self._win_ctrl_keys = set()
         self._win_alt_keys = set()
@@ -51,6 +52,9 @@ class ClipboardWheel:
         self.raw_ctrl_wheel_count = 0
         self.received_last_at = 0.0
         self._native_error = ''
+
+    def set_activation_mode(self, mode):
+        self.activation_mode = 'ctrl_alt' if mode == 'ctrl_alt' else 'wheel'
 
     def start(self):
         self.stop()
@@ -142,8 +146,11 @@ class ClipboardWheel:
                         if event_type == 12:  # flagsChanged
                             if self._mac_ctrl and not ctrl:
                                 self._commit_locked()
-                            elif ctrl and alt and not self._mac_alt and self._selected:
-                                self.events.put(('category', 1))
+                            elif ctrl and alt and not self._mac_alt:
+                                if self.activation_mode == 'ctrl_alt' and not self._selected:
+                                    self._move_locked(1)
+                                elif self._selected:
+                                    self.events.put(('category', 1))
                             self._mac_ctrl = ctrl
                             self._mac_alt = alt
                         elif event_type == 10 and self._selected:
@@ -152,7 +159,7 @@ class ClipboardWheel:
                                 self._cancel_locked()
                         elif event_type == 22:
                             self.raw_wheel_count += 1
-                            if ctrl:
+                            if ctrl and (self.activation_mode == 'wheel' or self._selected):
                                 self._mac_ctrl = True
                                 self._mac_alt = alt
                                 self._mac_event_count += 1
@@ -316,8 +323,11 @@ class ClipboardWheel:
                 self._pressed.add(str(key))
             elif self.keyboard and key in (self.keyboard.Key.alt, self.keyboard.Key.alt_l, self.keyboard.Key.alt_r, getattr(self.keyboard.Key,'alt_gr',None)):
                 marker=str(key)
-                if marker not in self._pressed and self._selected and self._ctrl_held():
-                    self.events.put(('category', 1))
+                if marker not in self._pressed and self._ctrl_held():
+                    if self.activation_mode == 'ctrl_alt' and not self._selected:
+                        self._move_locked(1)
+                    elif self._selected:
+                        self.events.put(('category', 1))
                 self._pressed.add(marker)
             elif self.keyboard and key == self.keyboard.Key.esc and self._selected:
                 self._cancel_locked()
@@ -380,7 +390,7 @@ class ClipboardWheel:
         # pynput fallback shared by all desktop platforms.
         with self._lock:
             self.raw_wheel_count += 1
-            if not dy or not self._ctrl_held():
+            if not dy or not self._ctrl_held() or (self.activation_mode == 'ctrl_alt' and not self._selected):
                 return
             self.raw_ctrl_wheel_count += 1
             self._move_locked(dy)
@@ -481,8 +491,13 @@ class ClipboardWheel:
             if code >= 0 and msg == 0x020A:  # WM_MOUSEWHEEL
                 try:
                     self.raw_wheel_count += 1
-                    ctrl = self._win_ctrl or bool(user.GetAsyncKeyState(0x11) & 0x8000)
-                    if ctrl:
+                    ctrl = bool(user.GetAsyncKeyState(0x11) & 0x8000)
+                    if not ctrl:
+                        with self._lock:
+                            self._win_ctrl_keys.clear()
+                            self._win_ctrl = False
+                            self._commit_locked()
+                    if ctrl and (self.activation_mode == 'wheel' or self._selected):
                         self.raw_ctrl_wheel_count += 1
                         m = ctypes.cast(data, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
                         delta = ctypes.c_short((m.mouseData >> 16) & 0xFFFF).value
@@ -514,8 +529,11 @@ class ClipboardWheel:
                         elif key in (0x12,0xA4,0xA5):
                             if down and key not in self._win_alt_keys:
                                 self._win_alt_keys.add(key)
-                                if self._selected and self._win_ctrl:
-                                    self.events.put(('category',1))
+                                if bool(user.GetAsyncKeyState(0x11) & 0x8000):
+                                    if self.activation_mode == 'ctrl_alt' and not self._selected:
+                                        self._move_locked(1)
+                                    elif self._selected:
+                                        self.events.put(('category',1))
                             elif not down:
                                 self._win_alt_keys.discard(key)
                         elif key == 0x1B and down and self._selected:
