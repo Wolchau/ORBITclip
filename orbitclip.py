@@ -62,7 +62,7 @@ from orbit_global_shortcuts import FlowShortcuts
 from orbit_palette import CommandPalette
 from orbit_drum_preview import DrumLivePreview
 from orbit_update_ui import UpdateWindow
-from orbit_update import consume_status
+from orbit_update import consume_status, log_update, read_history
 from orbit_messenger_ui import FileReviewDialog, validate_dropped_files
 
 APP_NAME = 'ORBITclip'
@@ -2177,6 +2177,18 @@ class OrbitApp:
         self.clipboard=self.qt.clipboard();self.clipboard.dataChanged.connect(self.on_clipboard)
         self.toast=FloatingToast()
         self._last_update_status=consume_status()
+        if self._last_update_status:
+            # The previous 7.7.0 updater had no journal yet. Record its first
+            # upgrade result on launch, but do not duplicate newer entries.
+            try:
+                previous=read_history(1)
+                status_event='success' if self._last_update_status.get('ok') else 'failure'
+                if not previous or previous[-1].get('event')!=status_event:
+                    log_update(status_event,
+                               'Предыдущее обновление завершено' if status_event=='success'
+                               else 'Предыдущее обновление завершилось с ошибкой')
+            except OSError:
+                pass
         self.wheel_view=str(self.settings.get('wheel_view','compact'))
         self.drum_style=normalize_drum_style(self.settings.get('drum_style','minimal'))
         self.drum_options=normalize_drum_options(self.settings.get('drum_options'))
