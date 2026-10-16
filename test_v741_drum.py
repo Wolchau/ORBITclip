@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parent
 
 class ProjectionTests(unittest.TestCase):
     def test_version_and_selection_unwrap(self):
-        self.assertEqual(CLIENT_VERSION, '7.8.0')
+        self.assertEqual(CLIENT_VERSION, '7.8.1')
         self.assertEqual(next_target(4, 0, 5, 1), 5)
         self.assertEqual(next_target(0, 4, 5, -1), -1)
         self.assertEqual(next_target(0, 1, 2, -1), -1)
