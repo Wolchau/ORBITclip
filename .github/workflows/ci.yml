@@ -29,22 +29,22 @@ jobs:
           python - <<'PY'
           import json, zipfile
           from pathlib import Path
-          path=Path('dist/ORBITclip_Patch_v7_6_3.zip')
+          path=Path('dist/ORBITclip_Patch_v7_7_0.zip')
           assert path.is_file(), 'Patch archive missing'
           assert path.stat().st_size < 400_000, 'Patch is unexpectedly large'
           with zipfile.ZipFile(path) as z:
               names=z.namelist()
-              manifest=json.loads(z.read('ORBITclip_Patch_v7_6_3/manifest.json'))
-              assert manifest['from_version']=='7.6.2'
-              assert manifest['to_version']=='7.6.3'
-              assert any(x['path']=='orbit_version.py' for x in manifest['changes'])
+              manifest=json.loads(z.read('ORBITclip_Patch_v7_7_0/manifest.json'))
+              assert manifest['from_version']=='7.6.3'
+              assert manifest['to_version']=='7.7.0'
+              assert any(x['path']=='orbit_update.py' for x in manifest['changes'])
               assert all('.venv' not in x and '/test_' not in x for x in names)
           assert all(x['path']!='README.md' for x in manifest['changes'])
           assert all(x['path']!='client_defaults.json' for x in manifest['changes'])
           print(path.name, path.stat().st_size, 'bytes')
           PY
       - name: Install real ZIP on previous version, reject tampering and exercise rollback
-        run: python tools/verify_release_upgrade.py dist/ORBITclip_Patch_v7_6_3.zip
+        run: python tools/verify_release_upgrade.py dist/ORBITclip_Patch_v7_7_0.zip
 
   qt-drum:
     name: Real Qt offscreen drum render
@@ -59,7 +59,7 @@ jobs:
       - name: Install PySide6
         run: python -m pip install 'PySide6>=6.7,<7'
       - name: Verify transparent Qt canvas and animated wheel
-        run: python -m unittest -v test_v741_qt test_v751_qt test_v760_qt test_v761_qt test_v762_qt test_v763_visual_qt
+        run: python -m unittest -v test_v741_qt test_v751_qt test_v760_qt test_v761_qt test_v762_qt test_v763_visual_qt test_v770_qt
 
   native-smoke:
     name: Native CI smoke · ${{ matrix.os }}
@@ -83,9 +83,9 @@ jobs:
       - name: Build and install true patch on previous version
         run: |
           python tools/release_builder.py
-          python tools/verify_release_upgrade.py dist/ORBITclip_Patch_v7_6_3.zip
+          python tools/verify_release_upgrade.py dist/ORBITclip_Patch_v7_7_0.zip
       - name: Cross-platform visual QImage rendering (no native popup)
-        run: python -m unittest -v test_v763_visual_qt
+        run: python -m unittest -v test_v763_visual_qt test_v770_qt
       - name: Preserve drum screenshots for review
         if: always()
         uses: actions/upload-artifact@v4
