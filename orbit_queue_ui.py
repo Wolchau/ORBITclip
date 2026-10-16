@@ -3,7 +3,7 @@
 Editing and browsing never paste into another application. The global
 Ctrl+Alt+J shortcut still performs the actual paste through OrbitApp.
 """
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton,
     QPlainTextEdit, QListWidget, QListWidgetItem, QAbstractItemView,
@@ -158,8 +158,9 @@ class PasteQueueWindow(QWidget):
             return
         for target,uid in enumerate(ids):
             queue.move(uid,target)
-        self.app.queue_changed()
-        self.refresh(preferred=ids[0] if ids else None)
+        # Do not mutate the Qt list model while rowsMoved is still emitted.
+        # The queue data is already reordered; schedule UI refresh one event later.
+        QTimer.singleShot(0,self.app.queue_changed)
 
     def shift(self,direction):
         entry=self._current_entry()
