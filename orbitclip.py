@@ -1041,30 +1041,30 @@ class MessageBubble(QFrame):
         inner=QVBoxLayout(self);inner.setContentsMargins(14,10,14,8);inner.setSpacing(4)
         if not own and sender:
             who=QLabel(sender)
-            who.setStyleSheet('color:#95C7BF;font-size:10px;font-weight:600;')
+            who.setStyleSheet('color:'+theme['accent']+';font-size:10px;font-weight:600;')
             inner.addWidget(who)
         quoted=content.get('reply_to')
         if isinstance(quoted,dict):
             summary=QLabel(('↳ '+('Вы' if quoted.get('own') else 'Собеседник')+' · '+truncate(str(quoted.get('text','')),95)))
             summary.setWordWrap(True);summary.setTextFormat(Qt.PlainText)
-            summary.setStyleSheet('background:#1D2D37;color:#A7C7D0;border-left:2px solid #8DB5C0;border-radius:4px;padding:5px;font-size:10px;')
+            summary.setStyleSheet(f"background:{theme['surface']};color:{theme['muted']};border-left:2px solid {theme['accent']};border-radius:4px;padding:5px;font-size:10px;")
             inner.addWidget(summary)
         kind=content.get('kind')
         if kind=='file':
             name=str(content.get('name','attachment'))
             line=QHBoxLayout();line.setSpacing(7)
-            file_ico=QLabel('▣');file_ico.setStyleSheet('color:#9CD5C6;font-size:22px;')
+            file_ico=QLabel('▣');file_ico.setStyleSheet('color:'+theme['accent']+';font-size:22px;')
             line.addWidget(file_ico)
             info=QVBoxLayout();info.setSpacing(1)
             filename=QLabel(truncate(name,46))
             filename.setToolTip(name)
-            filename.setStyleSheet('color:#ECF5F5;font-size:12px;font-weight:600;')
+            filename.setStyleSheet('color:'+theme['text']+';font-size:12px;font-weight:600;')
             info.addWidget(filename)
             file_path=Path(saved_path) if saved_path else None
             self.saved_path=file_path
             if file_path and file_path.is_file():
                 sub=QLabel('Сохранено на компьютере')
-                sub.setStyleSheet('color:#9EB7B1;font-size:10px;')
+                sub.setStyleSheet('color:'+theme['muted']+';font-size:10px;')
                 info.addWidget(sub)
                 filename.setToolTip(str(file_path))
             elif own:
@@ -1089,7 +1089,7 @@ class MessageBubble(QFrame):
         foot=QHBoxLayout();foot.setContentsMargins(0,0,0,0);foot.setSpacing(0)
         foot.addStretch(1)
         when=QLabel(('✓ ' if own else '')+stamp)
-        when.setStyleSheet('color:#A5BBC0;font-size:9px;')
+        when.setStyleSheet('color:'+theme['muted']+';font-size:9px;')
         foot.addWidget(when)
         inner.addLayout(foot)
         self.hover_actions=QFrame(self)
@@ -1211,21 +1211,32 @@ class ChatWindow(QWidget):
         self.setAcceptDrops(True)
         self.build()
 
+    def apply_theme(self):
+        p=self.app.palette
+        self.setStyleSheet(f"""
+            QWidget#messengerShell{{background:{p['bg']};}}
+            QFrame#chatSidebar{{background:{p['surface']};border:1px solid {p['border']};border-radius:16px;}}
+            QFrame#chatHeader{{background:{p['surface']};border:1px solid {p['border']};border-radius:14px;}}
+            QFrame#chatComposer{{background:{p['raised']};border:1px solid {p['border']};border-radius:17px;}}
+            QPlainTextEdit#chatInput{{background:transparent;color:{p['text']};border:0;padding:8px 6px;font-size:13px;}}
+            QListWidget#dialogList{{background:transparent;border:0;outline:0;}}
+            QListWidget#dialogList::item{{border-radius:11px;padding:12px 10px;margin-bottom:4px;
+                                          background:transparent;color:{p['text']};}}
+            QListWidget#dialogList::item:hover{{background:{p['hover']};}}
+            QListWidget#dialogList::item:selected{{background:{p['hover']};color:{p['text']};}}
+        """)
+        if hasattr(self,'msg_scroll'):
+            self.msg_scroll.setStyleSheet(
+                f'QScrollArea#messageScroll{{background:{p["bg"]};border-radius:15px;border:0;}}')
+            self.msg_container.setStyleSheet('background:'+p['bg']+';')
+        if hasattr(self,'avatar'):
+            self.avatar.setStyleSheet(
+                f"background:{p['hover']};color:{p['accent']};border-radius:19px;"
+                "font-size:18px;font-weight:700;")
+
     def build(self):
         self.setObjectName('messengerShell')
-        self.setStyleSheet("""
-            QWidget#messengerShell{background:#111C25;}
-            QFrame#chatSidebar{background:#192833;border:1px solid #2B4251;border-radius:16px;}
-            QFrame#chatHeader{background:#1B2B37;border:1px solid #2C4150;border-radius:14px;}
-            QFrame#chatComposer{background:#20313F;border:1px solid #344A59;border-radius:17px;}
-            QFrame#chatComposer:focus-within{border-color:#7197A4;}
-            QPlainTextEdit#chatInput{background:transparent;border:0;padding:8px 6px;font-size:13px;}
-            QListWidget#dialogList{background:transparent;border:0;outline:0;}
-            QListWidget#dialogList::item{border-radius:11px;padding:12px 10px;margin-bottom:4px;
-                                            background:transparent;color:#D4E3EB;}
-            QListWidget#dialogList::item:hover{background:#2B4250;}
-            QListWidget#dialogList::item:selected{background:#345464;color:#FFFFFF;}
-        """)
+        self.apply_theme()
         lay=QVBoxLayout(self);lay.setContentsMargins(12,11,12,12);lay.setSpacing(10)
         headline=QHBoxLayout()
         title=QLabel('ORBITclip');title.setStyleSheet('font-size:20px;font-weight:750;color:#F5B49F;')
@@ -1242,6 +1253,7 @@ class ChatWindow(QWidget):
         lay.addLayout(tabs)
         self.pages=QStackedWidget();lay.addWidget(self.pages,1)
         self.build_chat();self.build_connect()
+        self.apply_theme()
         self.set_page(0 if self.app.remote_config or self.app.identity.trusted else 1)
         self.refresh_peers()
 
@@ -2068,6 +2080,10 @@ class OrbitApp:
         for widget in self.qt.allWidgets():
             if isinstance(widget,OrbitSelect):widget.set_theme(value)
         if isinstance(self.bubble,DrumBubble):self.bubble.update()
+        if self.chat:
+            self.chat.apply_theme()
+            if self.chat.isVisible() and self.chat.pages.currentIndex()==0:
+                self.chat.refresh_messages()
         self.settings['appearance_theme']=value
         self.save_settings()
         self.clock.update()
