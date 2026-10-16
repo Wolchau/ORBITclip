@@ -5,7 +5,9 @@ import hashlib
 import json
 from pathlib import Path
 from zipfile import ZipFile
+import sys
 
+sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
 from tools.release_builder import patchable_path
 from orbit_update_full import validate_snapshot_manifest
 
