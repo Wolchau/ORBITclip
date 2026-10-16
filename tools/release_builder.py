@@ -99,7 +99,7 @@ def patchable_path(rel):
 def incremental_patch(version):
     """Build only changed client modules since the preceding version."""
     import subprocess
-    oldtag='v7.6.2'
+    oldtag='v7.6.3'
     def git(*args):
         return subprocess.run(['git',*args],cwd=ROOT,check=True,capture_output=True).stdout
     try:
@@ -124,7 +124,7 @@ def incremental_patch(version):
     prefix='ORBITclip_Patch_v'+version.replace('.','_')+'/'
     (ROOT/'dist').mkdir(exist_ok=True)
     output=ROOT/'dist'/(prefix.rstrip('/')+'.zip')
-    manifest={'app':'ORBITclip','from_version':'7.6.2','to_version':version,'changes':records}
+    manifest={'app':'ORBITclip','from_version':'7.6.3','to_version':version,'changes':records}
     with ZipFile(output,'w',compression=ZIP_DEFLATED,compresslevel=9) as z:
         z.writestr(prefix+'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
         z.write(ROOT/'tools'/'patch_installer.py',prefix+'apply_patch.py')
@@ -147,5 +147,5 @@ if __name__=='__main__':
     print('Checked version',v,'test credential policy')
     if not args.check_only:
         bundle(v)
-        if v=='7.6.3':
+        if v=='7.7.0':
             incremental_patch(v)
