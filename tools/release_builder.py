@@ -117,9 +117,19 @@ def patchable_path(rel):
 def incremental_patch(version):
     """Build only changed client modules since the preceding version."""
     import subprocess
-    oldtag='v7.8.0'
     def git(*args):
         return subprocess.run(['git',*args],cwd=ROOT,check=True,capture_output=True).stdout
+    available=[]
+    for tag in git('tag','--list','v*').decode().splitlines():
+        match=re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)',tag)
+        if match:
+            parsed=tuple(map(int,match.groups()))
+            if parsed<tuple(map(int,version.split('.'))):
+                available.append((parsed,tag))
+    if not available:
+        print('No earlier tagged release; incremental patch skipped')
+        return
+    oldtag=max(available)[1]
     try:
         changes=git('diff','--name-status',oldtag,'HEAD').decode().splitlines()
     except (OSError,subprocess.CalledProcessError):
@@ -142,7 +152,7 @@ def incremental_patch(version):
     prefix='ORBITclip_Patch_v'+version.replace('.','_')+'/'
     (ROOT/'dist').mkdir(exist_ok=True)
     output=ROOT/'dist'/(prefix.rstrip('/')+'.zip')
-    manifest={'app':'ORBITclip','from_version':'7.8.0','to_version':version,'changes':records}
+    manifest={'app':'ORBITclip','from_version':oldtag.removeprefix('v'),'to_version':version,'changes':records}
     with ZipFile(output,'w',compression=ZIP_DEFLATED,compresslevel=9) as z:
         z.writestr(prefix+'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
         z.write(ROOT/'tools'/'patch_installer.py',prefix+'apply_patch.py')
@@ -165,5 +175,7 @@ if __name__=='__main__':
     print('Checked version',v,'test credential policy')
     if not args.check_only:
         bundle(v)
-        if v=='7.8.2':
+        if v!='7.8.2':
             incremental_patch(v)
+        else:
+            print('v7.8.2 is a clean full-snapshot baseline, without a legacy delta patch')
