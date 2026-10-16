@@ -9,7 +9,7 @@ import math
 
 from PySide6.QtCore import Qt, QRectF, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import (
-    QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen,
+    QCursor, QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen,
     QPolygonF, QRadialGradient, QBrush,
 )
 from PySide6.QtCore import QPointF
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from orbit_drum_geometry import next_target, visible_faces
 from orbit_drum_styles import DRUM_STYLES, normalize_drum_style
+from orbit_drum_layout import DEFAULTS, normalize_options, place_popup, shape_size
 
 
 class DrumBubble(QWidget):
@@ -27,6 +28,7 @@ class DrumBubble(QWidget):
         self.app = app
         self.style_name = normalize_drum_style(getattr(app, 'drum_style', 'minimal'))
         self.animate_categories = bool(getattr(app, 'animate_drum_categories', True))
+        self.options = normalize_options(getattr(app, 'drum_options', DEFAULTS))
         self.setWindowFlags(
             Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint |
             Qt.WindowDoesNotAcceptFocus | Qt.NoDropShadowWindowHint |
@@ -36,7 +38,7 @@ class DrumBubble(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_MacAlwaysShowToolWindow, True)
         self.setAutoFillBackground(False)
-        self.setFixedSize(390, 302)
+        self.setFixedSize(*shape_size(self.options))
         self.heading = 'Буфер обмена'
         self.position = ''
         self.items = ['', '', '']
@@ -60,6 +62,16 @@ class DrumBubble(QWidget):
     def set_style(self, value):
         self.style_name = normalize_drum_style(value)
         self.update()
+
+    def set_options(self, options):
+        self.options = normalize_options(options)
+        size = shape_size(self.options)
+        if (self.width(), self.height()) != size:
+            self.setFixedSize(*size)
+        if self.isVisible():
+            self._display()
+        else:
+            self.update()
 
     def set_category_animation(self, enabled):
         self.animate_categories = bool(enabled)
@@ -186,16 +198,30 @@ class DrumBubble(QWidget):
         super().hideEvent(event)
 
     def _display(self):
+        # Pointer location, not the clock widget, determines the current screen.
+        # Qt desktop coordinates may be negative (left/upper secondary display).
+        mode = self.options['position']
+        pointer = QCursor.pos()
         clock = self.app.clock
-        screen = QApplication.screenAt(clock.frameGeometry().center()) or QApplication.primaryScreen()
+        clock_center = clock.frameGeometry().center()
+        anchor = clock_center if mode == 'clock' else pointer
+        screen = (QApplication.screenAt(anchor)
+                  or QApplication.screenAt(pointer)
+                  or QApplication.primaryScreen())
         if screen is not None:
-            area = screen.availableGeometry()
-            x = max(area.left() + 10, min(area.right() - self.width() - 10,
-                    clock.frameGeometry().center().x() - self.width() // 2))
-            desired = clock.y() + clock.height() + 9
-            if desired + self.height() + 12 > area.bottom():
-                desired = clock.y() - self.height() - 9
-            y = max(area.top() + 10, min(area.bottom() - self.height() - 10, desired))
+            # Explicitly move the native tool window to the target QScreen.
+            # Without this, macOS may keep a Qt.Tool window on its first screen.
+            self.winId()
+            handle = self.windowHandle()
+            if handle is not None and handle.screen() is not screen:
+                handle.setScreen(screen)
+            region = screen.availableGeometry()
+            if mode == 'clock':
+                anchor = clock.frameGeometry().bottomLeft()
+                anchor.setX(clock_center.x())
+            x, y = place_popup(
+                (region.x(), region.y(), region.width(), region.height()),
+                (anchor.x(), anchor.y()), (self.width(), self.height()), mode)
             self.move(x, y)
         self.update()
         if not self.isVisible():
@@ -378,36 +404,88 @@ class DrumBubble(QWidget):
                              Qt.AlignVCenter | Qt.AlignLeft, label)
         painter.restore()
 
-    def _paint_scene(self, painter, pal, heading, position, entries, cursor, static_mode):
-        # A floating category badge is legible even over bright desktop windows.
-        badge = QRectF(19, 5, 278, 34)
-        painter.setPen(QPen(QColor(pal['border']), .9))
-        pill = QLinearGradient(badge.left(), badge.top(), badge.left(), badge.bottom())
-        top = QColor(pal['raised']); top.setAlpha(246)
-        bottom = QColor(pal['surface']); bottom.setAlpha(240)
-        pill.setColorAt(0, top); pill.setColorAt(1, bottom)
-        painter.setBrush(QBrush(pill))
-        painter.drawRoundedRect(badge, 11, 11)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(pal['accent']))
-        painter.drawEllipse(QRectF(31, 19, 7, 7))
+    def _paint_header(self, painter, pal, heading, position):
+        mode = self.options['header']
+        if mode == 'hidden':
+            return
+        y = 270 if self.options['header_position'] == 'bottom' else 7
         font = QFont(painter.font())
-        font.setPixelSize(13); font.setWeight(QFont.DemiBold)
+        font.setPixelSize(13 if mode == 'full' else 12)
+        font.setWeight(QFont.DemiBold)
         painter.setFont(font)
-        metrics = QFontMetrics(font)
+        index = str(position) if self.options['show_index'] and mode != 'minimal' else ''
+        if mode == 'full':
+            badge = QRectF(18, y-2, 354 if index else 288, 32)
+            painter.setPen(QPen(QColor(pal['border']), .8))
+            painter.setBrush(QColor(pal['surface']))
+            painter.drawRoundedRect(badge, 9, 9)
+            painter.setPen(QColor(pal['accent']))
+            painter.drawEllipse(QRectF(28, y+11, 5, 5))
+            x, title_width = 43, 232
+        else:
+            # No heavyweight capsule around the category.
+            x, title_width = 19, 267
         painter.setPen(QColor(pal['text']))
-        label = metrics.elidedText(str(heading), Qt.ElideRight, 235)
-        painter.drawText(QRectF(48, 9, 237, 25), Qt.AlignVCenter | Qt.AlignLeft, label)
+        label = QFontMetrics(font).elidedText(str(heading), Qt.ElideRight, title_width)
+        painter.drawText(QRectF(x, y, title_width, 27), Qt.AlignVCenter | Qt.AlignLeft, label)
+        if index:
+            font.setPixelSize(11); font.setWeight(QFont.Normal)
+            painter.setFont(font)
+            painter.setPen(QColor(pal['muted']))
+            painter.drawText(QRectF(300, y, 67, 27),
+                             Qt.AlignVCenter | Qt.AlignRight, index)
 
-        font.setPixelSize(11); font.setWeight(QFont.Medium)
-        painter.setFont(font)
-        painter.setPen(QColor(pal['muted']))
-        painter.drawText(QRectF(303, 10, 67, 22),
-                         Qt.AlignVCenter | Qt.AlignRight, str(position))
+    def _draw_ribbon(self, painter, pal, entries, cursor, static_mode):
+        """Distinct horizontal card layout; same selection index and animation."""
+        n = min(self.options['neighbors'], max(0, len(entries)-1))
+        offset = (25 + self.options['neighbor_gap'] * .8)
+        base = 0.0 if static_mode else cursor
+        front = round(base)
+        faces = []
+        for unwrapped in range(front-n, front+n+1):
+            rel = unwrapped-base
+            if abs(rel) > n+.55:
+                continue
+            faces.append((rel, entries[unwrapped % len(entries)]))
+        faces.sort(key=lambda item: -abs(item[0]))
+        for relative, entry in faces:
+            focus = abs(relative) < .52
+            scale = max(.58, 1-.12*abs(relative))
+            w = (220 if focus else 108)*scale
+            h = (83 if focus else 65)*scale
+            x = 195 + relative*offset - w/2
+            y = 160 - h/2 + abs(relative)*3
+            color = QColor(pal['raised'] if focus else pal['surface'])
+            color.setAlpha(245 if focus else 220)
+            strength = 1.0 if focus else self.options['neighbor_opacity']/100.0
+            painter.save()
+            painter.setOpacity(painter.opacity()*strength)
+            painter.setBrush(color)
+            painter.setPen(QPen(QColor(pal['accent'] if focus else pal['border']),
+                                1.8 if focus else .75))
+            painter.drawRoundedRect(QRectF(x,y,w,h), 13 if focus else 9, 13 if focus else 9)
+            if focus:
+                marker=QColor(pal['accent'])
+                painter.setBrush(marker);painter.setPen(Qt.NoPen)
+                painter.drawRoundedRect(QRectF(x+9,y+11,3,h-22),1.5,1.5)
+            font=QFont(painter.font());font.setPixelSize(14 if focus else 11)
+            font.setWeight(QFont.DemiBold if focus else QFont.Normal)
+            painter.setFont(font)
+            painter.setPen(QColor(pal['text'] if focus else pal['muted']))
+            available=max(10,int(w-25))
+            title=QFontMetrics(font).elidedText(self._preview(entry),Qt.ElideRight,available)
+            painter.drawText(QRectF(x+15,y+3,w-25,h-6),
+                             Qt.AlignLeft|Qt.AlignVCenter,title)
+            painter.restore()
+
+    def _paint_scene(self, painter, pal, heading, position, entries, cursor, static_mode):
+        self._paint_header(painter, pal, heading, position)
         if not entries:
             return
-
         skin = DRUM_STYLES[self.style_name]
+        if self.options['shape'] == 'ribbon':
+            self._draw_ribbon(painter,pal,entries,cursor,static_mode)
+            return
         halo = QRadialGradient(QPointF(195, 158), 172, QPointF(195, 158))
         glow = QColor(pal['bg'])
         glow.setAlpha(skin['halo'])
@@ -417,37 +495,55 @@ class DrumBubble(QWidget):
         painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(halo))
         painter.drawEllipse(QRectF(5, 38, 380, 245))
+        n = self.options['neighbors']
+        # The ring angular spacing adapts to the selected number of neighbors.
+        step = min(49.0, 76.0/(n+.53))
+        half = step*.45
         if static_mode:
-            faces = [face for face in visible_faces(0.0, count=1)
+            faces = [face for face in visible_faces(
+                0.0, count=1, extent=0, step_degrees=step,half_degrees=half)
                      if face['relative'] == 0]
         else:
-            faces = visible_faces(cursor, count=len(entries))
+            faces = [face for face in visible_faces(
+                cursor, count=len(entries), extent=n+1,
+                step_degrees=step, half_degrees=half)
+                     if abs(face['relative']) <= n+.55]
         painter.save()
         factor=skin.get('width_scale',1.0)
         painter.translate(195,0)
         painter.scale(factor,1.0)
         painter.translate(-195,0)
         for face in faces:
+            strength=(1.0 if abs(face['relative']) < .52 else
+                      self.options['neighbor_opacity']/100.0)
+            painter.save()
+            painter.setOpacity(painter.opacity()*strength)
+            if abs(face['relative']) > .1:
+                painter.translate(math.sin(face['angle'])*self.options['neighbor_gap'],0)
             self._draw_face(painter, face, self._preview(entries[face['index']]), pal)
+            painter.restore()
         painter.restore()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         pal = self.app.palette
+        painter.scale(self.width()/390.0,self.height()/302.0)
+        overall = self.options['opacity']/100.0
+        painter.setOpacity(overall)
         if self._category_frame is not None and self._category_progress < 1.0:
             progress = self._category_progress
             old_title, old_position, old_entries, old_cursor, old_static = self._category_frame
             # Adjacent category cylinders exchange positions with a soft lateral
             # displacement. No extra top-level windows, and rapid cycling remains safe.
             painter.save()
-            painter.setOpacity(1.0 - progress)
+            painter.setOpacity(overall*(1.0 - progress))
             painter.translate(-26.0 * progress, 0)
             self._paint_scene(painter, pal, old_title, old_position,
                               old_entries, old_cursor, old_static)
             painter.restore()
             painter.save()
-            painter.setOpacity(progress)
+            painter.setOpacity(overall*progress)
             painter.translate(24.0 * (1.0 - progress), 0)
             self._paint_scene(painter, pal, self.heading, self.position,
                               self._entries, self._cursor, self._static_mode)
