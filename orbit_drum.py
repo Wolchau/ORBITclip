@@ -534,8 +534,16 @@ class DrumBubble(QWidget):
                       self.options['neighbor_opacity']/100.0)
             painter.save()
             painter.setOpacity(painter.opacity()*strength)
-            if abs(face['relative']) > .1:
-                painter.translate(math.sin(face['angle'])*self.options['neighbor_gap'],0)
+            # Every facet must remain on the SAME vertical cylinder axis.
+            # 7.6.1 shifted each facet left/right according to sin(angle),
+            # creating an unintended diagonal, parallelepiped-like staircase.
+            # The spacing preference now symmetrically narrows side facets
+            # instead of changing their horizontal centers.
+            depth = min(1.0, abs(face['relative']) / max(1, n))
+            narrow = 1.0 - self.options['neighbor_gap'] * depth / 260.0
+            painter.translate(195.0, 0)
+            painter.scale(narrow, 1.0)
+            painter.translate(-195.0, 0)
             self._draw_face(painter, face, self._preview(entries[face['index']]), pal)
             painter.restore()
         painter.restore()
@@ -554,13 +562,11 @@ class DrumBubble(QWidget):
             # displacement. No extra top-level windows, and rapid cycling remains safe.
             painter.save()
             painter.setOpacity(overall*(1.0 - progress))
-            painter.translate(-26.0 * progress, 0)
             self._paint_scene(painter, pal, old_title, old_position,
                               old_entries, old_cursor, old_static)
             painter.restore()
             painter.save()
             painter.setOpacity(overall*progress)
-            painter.translate(24.0 * (1.0 - progress), 0)
             self._paint_scene(painter, pal, self.heading, self.position,
                               self._entries, self._cursor, self._static_mode)
             painter.restore()
