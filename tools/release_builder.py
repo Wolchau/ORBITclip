@@ -101,6 +101,7 @@ def incremental_patch(version):
         records.append({'path':rel.as_posix(),'before':before,'after':after})
         if body is not None: contents[rel.as_posix()]=body
     prefix='ORBITclip_Patch_v'+version.replace('.','_')+'/'
+    (ROOT/'dist').mkdir(exist_ok=True)
     output=ROOT/'dist'/(prefix.rstrip('/')+'.zip')
     manifest={'app':'ORBITclip','from_version':'7.5.0','to_version':version,'changes':records}
     with ZipFile(output,'w',compression=ZIP_DEFLATED,compresslevel=9) as z:
