@@ -53,6 +53,8 @@ from orbit_notifications import NotificationStore
 from orbit_analytics import AnalyticsStore
 from orbit_activity_ui import NotificationCenterWindow, AnalyticsWindow
 from orbit_drum import DrumBubble
+from orbit_drum_styles import DRUM_STYLES, normalize_drum_style
+from orbit_select import OrbitSelect
 
 APP_NAME = 'ORBITclip'
 QT_CLIENT_VERSION = CLIENT_VERSION
@@ -1702,21 +1704,6 @@ class OnlineWindow(QWidget):
         self.app.directory.request(peer_id)
         self.info.setText('Запрос отправляется…')
 
-class OrbitSelect(QComboBox):
-    """Uniform non-native dropdown with enough vertical room for text."""
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        view=QListWidget()
-        view.setSpacing(3)
-        view.setStyleSheet("QListWidget {padding:6px; border:1px solid #526677;}"
-                           "QListWidget::item {min-height:30px; padding:5px 12px;}"
-                           "QListWidget::item:selected {border-radius:6px;}")
-        self.setView(view)
-        self.setMinimumHeight(38)
-        self.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.setMinimumContentsLength(16)
-
-
 class LocalWheelFilter(QObject):
     """Ctrl+wheel fallback for focused ORBITclip windows without system permissions."""
     def __init__(self,app):
@@ -1745,8 +1732,17 @@ class PreferencesWindow(QWidget):
         self.setWindowTitle('ORBITclip · Настройки · v'+CLIENT_VERSION)
         self.setWindowIcon(QIcon(str(ASSETS/'orbit_icon.png')))
         self.setMinimumWidth(450)
-        self.resize(545,405)
-        lay=QVBoxLayout(self);lay.setContentsMargins(22,20,22,18);lay.setSpacing(14)
+        self.resize(565,655)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8,8,8,8)
+        content_scroll = QScrollArea(self)
+        content_scroll.setWidgetResizable(True)
+        content_scroll.setFrameShape(QFrame.NoFrame)
+        content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        panel = QWidget()
+        lay=QVBoxLayout(panel);lay.setContentsMargins(18,16,18,18);lay.setSpacing(11)
+        content_scroll.setWidget(panel)
+        outer.addWidget(content_scroll)
         heading=QLabel('Настройки');heading.setObjectName('heading')
         lay.addWidget(heading)
         lay.addWidget(label('ORBITclip v'+CLIENT_VERSION+' · протокол '+str(__import__('orbit_version').PROTOCOL_VERSION)))
@@ -1782,6 +1778,24 @@ class PreferencesWindow(QWidget):
         self.wheel_view.setCurrentIndex(1 if app.wheel_view=='drum' else 0)
         lay.addWidget(self.wheel_view)
         self.wheel_view.currentIndexChanged.connect(lambda *_:app.set_wheel_view(self.wheel_view.currentData()))
+        lay.addWidget(label('Материал барабана'))
+        self.drum_skin=OrbitSelect()
+        for key,entry in DRUM_STYLES.items():
+            self.drum_skin.addItem(entry['name'],key)
+        self.drum_skin.setCurrentIndex(max(0,self.drum_skin.findData(app.drum_style)))
+        self.drum_skin.setEnabled(app.wheel_view=='drum')
+        lay.addWidget(self.drum_skin)
+        self.drum_skin.currentIndexChanged.connect(
+            lambda *_:app.set_drum_style(self.drum_skin.currentData()))
+        self.wheel_view.currentIndexChanged.connect(
+            lambda *_:self.drum_skin.setEnabled(self.wheel_view.currentData()=='drum'))
+        self.drum_motion=QCheckBox('Анимировать смену категорий')
+        self.drum_motion.setChecked(app.animate_drum_categories)
+        self.drum_motion.setEnabled(app.wheel_view=='drum')
+        self.drum_motion.toggled.connect(app.set_animate_drum_categories)
+        self.wheel_view.currentIndexChanged.connect(
+            lambda *_:self.drum_motion.setEnabled(self.wheel_view.currentData()=='drum'))
+        lay.addWidget(self.drum_motion)
         self.hide_clock=None
         if platform.system() in ('Windows','Darwin'):
             self.hide_clock=QCheckBox('Скрывать виджет часов (оставить системные значки)')
@@ -1816,6 +1830,7 @@ class OrbitApp:
         self.settings=read_settings()
         self.appearance_theme=normalize_theme(self.settings.get('appearance_theme','midnight'))
         self.palette=palette(self.appearance_theme)
+        self.qt.setProperty('orbit_theme',self.appearance_theme)
         self.qt.setStyleSheet(stylesheet(STYLE,self.appearance_theme))
         self.notifications=NotificationStore()
         self.analytics=AnalyticsStore(enabled=self.settings.get('analytics_enabled',True))
@@ -1865,6 +1880,8 @@ class OrbitApp:
         self.clipboard=self.qt.clipboard();self.clipboard.dataChanged.connect(self.on_clipboard)
         self.toast=FloatingToast()
         self.wheel_view=str(self.settings.get('wheel_view','compact'))
+        self.drum_style=normalize_drum_style(self.settings.get('drum_style','minimal'))
+        self.animate_drum_categories=bool(self.settings.get('animate_drum_categories',True))
         self.bubble=DrumBubble(self) if self.wheel_view=='drum' else ScrollBubble()
         self.history=None;self.chat=None;self.online_window=None;self.preferences=None;self.workspace_window=None;self.sql_explorer=None;self.capture_window=None;self.screenshot_editor=None;self.notification_window=None;self.analytics_window=None
         self.tour_seen=bool(self.settings.get('tour_seen',False))
@@ -1922,12 +1939,29 @@ class OrbitApp:
         self.bubble=DrumBubble(self) if mode=='drum' else ScrollBubble()
         self.settings['wheel_view']=mode;self.save_settings()
 
+    def set_drum_style(self,style):
+        value=normalize_drum_style(style)
+        if self.drum_style==value:return
+        self.drum_style=value
+        if isinstance(self.bubble,DrumBubble):self.bubble.set_style(value)
+        self.save_settings()
+
+    def set_animate_drum_categories(self,enabled):
+        self.animate_drum_categories=bool(enabled)
+        if isinstance(self.bubble,DrumBubble):
+            self.bubble.set_category_animation(self.animate_drum_categories)
+        self.save_settings()
+
     def set_theme(self,theme):
         value=normalize_theme(theme)
         if self.appearance_theme==value:return
         self.appearance_theme=value
         self.palette=palette(value)
+        self.qt.setProperty('orbit_theme',value)
         self.qt.setStyleSheet(stylesheet(STYLE,value))
+        for widget in self.qt.allWidgets():
+            if isinstance(widget,OrbitSelect):widget.set_theme(value)
+        if isinstance(self.bubble,DrumBubble):self.bubble.update()
         self.settings['appearance_theme']=value
         self.save_settings()
         self.clock.update()
@@ -2124,7 +2158,7 @@ class OrbitApp:
         self.online_window.show();self.online_window.raise_();self.online_window.activateWindow()
 
     def save_settings(self):
-        self.settings.update(wheel_activation_mode=self.wheel_activation_mode,wheel_view=self.wheel_view,appearance_theme=self.appearance_theme,analytics_enabled=self.analytics.enabled,remote_url=self.url,https_url=self.url,remote_token=self.token,https_token=self.token,
+        self.settings.update(drum_style=self.drum_style,animate_drum_categories=self.animate_drum_categories,wheel_activation_mode=self.wheel_activation_mode,wheel_view=self.wheel_view,appearance_theme=self.appearance_theme,analytics_enabled=self.analytics.enabled,remote_url=self.url,https_url=self.url,remote_token=self.token,https_token=self.token,
                              remote_pair=self.remote_pair,https_pair=self.remote_pair,remote_device=self.device,
                              remote_tls_pin=self.tls_pin,https_tls_pin=self.tls_pin,
                              remote_cursor=self.cursor,remote_cursor_place=self.cursor_place,

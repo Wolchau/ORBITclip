@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy
 )
 from orbit_appearance import palette
+from orbit_select import OrbitSelect
 
 
 class NotificationCenterWindow(QWidget):
@@ -132,7 +133,7 @@ class AnalyticsWindow(QWidget):
         header=QHBoxLayout();root.addLayout(header)
         title=QLabel('Моя активность');title.setObjectName('heading');header.addWidget(title)
         header.addStretch()
-        self.range=QComboBox();self.range.addItem('7 дней',7);self.range.addItem('30 дней',30)
+        self.range=OrbitSelect();self.range.addItem('7 дней',7);self.range.addItem('30 дней',30)
         self.range.addItem('90 дней',90);self.range.setCurrentIndex(1)
         self.range.currentIndexChanged.connect(self.refresh);header.addWidget(self.range)
         self.enabled=QCheckBox('Собирать статистику');self.enabled.setChecked(app.analytics.enabled)
