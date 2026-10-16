@@ -102,9 +102,13 @@ class ChainTests(unittest.TestCase):
         original=orbit_update_chain.install_staged
         calls=[0]
         def interrupt(stage,target):
-            calls[0]+=1
-            if calls[0]==3:
-                raise OSError('deliberate simulated failure after two successful steps')
+            if Path(target).resolve()==self.app.resolve():
+                calls[0]+=1
+                if calls[0]==3:
+                    # Assert this is a REAL failure during the third step;
+                    # the first two patches are already written to actual files.
+                    self.assertEqual(read_version(self.app),'7.8.4')
+                    raise OSError('deliberate simulated failure after two successful steps')
             return original(stage,target)
         with patch.object(orbit_update_chain,'install_staged',side_effect=interrupt):
             with self.assertRaises(OSError):
