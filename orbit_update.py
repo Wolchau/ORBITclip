@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import shutil
 import subprocess
 import sys
@@ -241,6 +242,8 @@ def install_staged(stage, target):
             if not payload.is_file() or digest(payload.read_bytes()) != change["after"]:
                 raise UpdateError("Файл в кэше обновления повреждён: " + str(relative))
     backups = target / ".orbitclip_patch_backups"
+    if backups.is_symlink():
+        raise UpdateError("Резервная папка не должна быть символической ссылкой")
     backup = backups / ("v" + data["from_version"] + "_to_v" + data["to_version"])
     if backup.exists() or backup.is_symlink():
         raise UpdateError("Резервная копия такого обновления уже существует")
@@ -263,10 +266,14 @@ def install_staged(stage, target):
                 dest.unlink()
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
+            mode = stat.S_IMODE(dest.stat().st_mode) if dest.exists() else (
+                0o755 if dest.suffix == ".command" else 0o644)
             fd, temporary = tempfile.mkstemp(prefix=".orbit_tmp_", dir=dest.parent)
             try:
                 with os.fdopen(fd, "wb") as output:
                     output.write((stage / "payload" / Path(*rel.parts)).read_bytes())
+                if os.name != "nt":
+                    os.chmod(temporary, mode)
                 os.replace(temporary, dest)
             finally:
                 if os.path.exists(temporary):
