@@ -1960,7 +1960,7 @@ class OrbitApp:
         history.setContextMenu(hm)
         history.activated.connect(lambda reason:self.open_history() if reason==QSystemTrayIcon.ActivationReason.DoubleClick else None)
         history.show()
-        history.messageClicked.connect(self.open_popup_notification)
+        if hasattr(history,'messageClicked'):history.messageClicked.connect(self.open_popup_notification)
         self.tray_icon=history;self.tray_menu=hm
         messenger=QSystemTrayIcon(self.qt)
         messenger.setIcon(icon('send'))
@@ -2065,7 +2065,7 @@ class OrbitApp:
         menu.addAction('Завершить ORBITclip',lambda checked=False:self.shutdown())
         tray.setContextMenu(menu)
         tray.activated.connect(self.tray_activated)
-        tray.messageClicked.connect(self.open_popup_notification)
+        if hasattr(tray,'messageClicked'):tray.messageClicked.connect(self.open_popup_notification)
         self.tray_icon=tray;self.tray_menu=menu
         self.refresh_tray_menu()
         tray.show()
