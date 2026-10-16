@@ -85,7 +85,7 @@ jobs:
           python tools/release_builder.py
           python tools/verify_release_upgrade.py dist/ORBITclip_Patch_v7_8_0.zip
       - name: Cross-platform visual QImage rendering (no native popup)
-        run: python -m unittest -v test_v763_visual_qt test_v770_qt
+        run: python -m unittest -v test_v763_visual_qt test_v770_qt test_v780_qt
       - name: Preserve drum screenshots for review
         if: always()
         uses: actions/upload-artifact@v4
