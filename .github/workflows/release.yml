@@ -26,8 +26,8 @@ jobs:
           python -m unittest discover -p 'test_*.py' -q
       - name: Build client and installer patch
         run: python tools/release_builder.py
-      - name: Smoke-test release ZIP on prior client before publication
-        run: python tools/verify_release_upgrade.py dist/ORBITclip_Patch_v7_8_1.zip
+      - name: Verify complete one-hop baseline before publication
+        run: python tools/verify_full_bundle.py dist/ORBITclip_CleanInstall_v7_8_2.zip
       - name: Publish only if version not released
         shell: bash
         env:

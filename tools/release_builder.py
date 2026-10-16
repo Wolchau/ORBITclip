@@ -59,7 +59,7 @@ def bundle(version):
     root_files=[p for p in root_files if p.is_file()]
     with ZipFile(out,'w',compression=ZIP_DEFLATED,compresslevel=9) as z:
         for p in root_files:
-            arcname=str(Path('ORBITclip')/p.name)
+            arcname=(Path('ORBITclip')/p.name).as_posix()
             if p.name=='client_defaults.json':
                 cfg=json.loads(p.read_text(encoding='utf-8'))
                 # An initial-install archive must never ship embedded relay credentials.
@@ -73,7 +73,25 @@ def bundle(version):
             for p in files_in(asset_dir):
                 if p.suffix.lower() not in ('.png','.svg','.ico','.icns','.gif','.jpg','.jpeg','.webp'):
                     continue
-                add_zip_member(z,p,str(Path('ORBITclip')/p.relative_to(ROOT)))
+                add_zip_member(z,p,(Path('ORBITclip')/p.relative_to(ROOT)).as_posix())
+    # The complete archive is the future one-hop update payload. Its manifest
+    # describes ONLY managed program files, never client_defaults.json.
+    packaged = {}
+    with ZipFile(out,'r') as z:
+        for info in z.infolist():
+            name=info.filename
+            if not name.startswith('ORBITclip/'):
+                continue
+            relative=Path(name).relative_to('ORBITclip')
+            if not patchable_path(relative):
+                continue
+            payload=z.read(name)
+            packaged[relative.as_posix()]={'sha256':hashlib.sha256(payload).hexdigest(),
+                                           'size':len(payload)}
+    manifest={'schema':1,'app':'ORBITclip','version':version,'files':packaged}
+    with ZipFile(out,'a',compression=ZIP_DEFLATED,compresslevel=9) as z:
+        z.writestr('ORBITclip/update-manifest.json',
+                   json.dumps(manifest,ensure_ascii=False,sort_keys=True,indent=2)+'\n')
     print(out.name,out.stat().st_size,'bytes,',len(root_files),'root files')
 
 # Exactly the files shipped by bundle(), less machine-specific configuration.
@@ -99,9 +117,19 @@ def patchable_path(rel):
 def incremental_patch(version):
     """Build only changed client modules since the preceding version."""
     import subprocess
-    oldtag='v7.8.0'
     def git(*args):
         return subprocess.run(['git',*args],cwd=ROOT,check=True,capture_output=True).stdout
+    available=[]
+    for tag in git('tag','--list','v*').decode().splitlines():
+        match=re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)',tag)
+        if match:
+            parsed=tuple(map(int,match.groups()))
+            if parsed<tuple(map(int,version.split('.'))):
+                available.append((parsed,tag))
+    if not available:
+        print('No earlier tagged release; incremental patch skipped')
+        return
+    oldtag=max(available)[1]
     try:
         changes=git('diff','--name-status',oldtag,'HEAD').decode().splitlines()
     except (OSError,subprocess.CalledProcessError):
@@ -124,7 +152,7 @@ def incremental_patch(version):
     prefix='ORBITclip_Patch_v'+version.replace('.','_')+'/'
     (ROOT/'dist').mkdir(exist_ok=True)
     output=ROOT/'dist'/(prefix.rstrip('/')+'.zip')
-    manifest={'app':'ORBITclip','from_version':'7.8.0','to_version':version,'changes':records}
+    manifest={'app':'ORBITclip','from_version':oldtag.removeprefix('v'),'to_version':version,'changes':records}
     with ZipFile(output,'w',compression=ZIP_DEFLATED,compresslevel=9) as z:
         z.writestr(prefix+'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
         z.write(ROOT/'tools'/'patch_installer.py',prefix+'apply_patch.py')
@@ -147,5 +175,7 @@ if __name__=='__main__':
     print('Checked version',v,'test credential policy')
     if not args.check_only:
         bundle(v)
-        if v=='7.8.1':
+        if v!='7.8.2':
             incremental_patch(v)
+        else:
+            print('v7.8.2 is a clean full-snapshot baseline, without a legacy delta patch')
