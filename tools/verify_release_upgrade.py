@@ -9,11 +9,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
-import io
 import json
 import subprocess
 import sys
-import tarfile
 import tempfile
 import shutil
 from pathlib import Path
@@ -35,23 +33,22 @@ def snapshot(folder):
 
 
 def prepare_previous(folder, ref):
-    data=subprocess.check_output(['git','archive','--format=tar',ref],cwd=ROOT)
-    with tarfile.open(fileobj=io.BytesIO(data)) as archive:
-        for entry in archive:
-            if not entry.isfile():
-                continue
-            relative=Path(entry.name)
-            if not patchable_path(relative) and relative.as_posix() != 'client_defaults.json':
-                continue
-            dest=folder/relative
-            dest.parent.mkdir(parents=True,exist_ok=True)
-            contents=archive.extractfile(entry).read()
-            if relative.name=='client_defaults.json':
-                config=json.loads(contents)
-                for key in ('https_token','remote_token','token'):
-                    config[key]=''
-                contents=json.dumps(config).encode('utf-8')
-            dest.write_bytes(contents)
+    # Use the exact blob retrieval used by the patch builder. Git for Windows
+    # may apply export transforms to git archive; `git show TAG:path` does not.
+    names=subprocess.check_output(['git','ls-tree','-r','--name-only',ref],cwd=ROOT)
+    for name in names.decode('utf-8').splitlines():
+        relative=Path(name)
+        if not patchable_path(relative) and relative.as_posix()!='client_defaults.json':
+            continue
+        dest=folder/relative
+        dest.parent.mkdir(parents=True,exist_ok=True)
+        contents=subprocess.check_output(['git','show',ref+':'+name],cwd=ROOT)
+        if relative.name=='client_defaults.json':
+            config=json.loads(contents)
+            for key in ('https_token','remote_token','token'):
+                config[key]=''
+            contents=json.dumps(config).encode('utf-8')
+        dest.write_bytes(contents)
 
 
 def command(installer,folder,*args,should_pass=True):
