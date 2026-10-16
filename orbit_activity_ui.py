@@ -45,6 +45,7 @@ class NotificationCenterWindow(QWidget):
         buttons.addWidget(QPushButton('Закрыть',clicked=self.close))
         self.groups.currentRowChanged.connect(self.refresh)
         self.items.currentRowChanged.connect(self.select_row)
+        self.items.itemDoubleClicked.connect(lambda *_: self.open_selected())
         self.refresh()
 
     def refresh(self,*_):
@@ -77,7 +78,10 @@ class NotificationCenterWindow(QWidget):
         index=self.items.currentRow()
         if index<0 or index>=len(self.rows):return
         item=self.rows[index]
-        if item['kind']=='messages':self.app.open_chat()
+        if item['kind']=='messages':
+            if item.get('target') in self.app.identity.trusted:
+                self.app.selected_peer=item['target']
+            self.app.open_chat()
         elif item['kind'] in ('files','spaces'):self.app.open_workspaces()
 
     def mark_all(self):
@@ -138,6 +142,12 @@ class AnalyticsWindow(QWidget):
         note.setObjectName('muted');note.setWordWrap(True);root.addWidget(note)
         self.cards=QLabel();self.cards.setWordWrap(True);self.cards.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.cards.setMinimumHeight(120);root.addWidget(self.cards)
+        root.addWidget(QLabel('Занимательная статистика текста'))
+        self.fun=QLabel()
+        self.fun.setWordWrap(True)
+        self.fun.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.fun.setMinimumHeight(88)
+        root.addWidget(self.fun)
         root.addWidget(QLabel('Активность по дням'))
         self.chart=ActivityChart(app);root.addWidget(self.chart,1)
         root.addWidget(QLabel('Источники копирований'))
@@ -155,6 +165,21 @@ class AnalyticsWindow(QWidget):
         self.cards.setText('     '.join(f'{title}:  {totals.get(key,0)}' for key,title in self.METRICS))
         self.sources.setText('   ·   '.join(f'{name}: {count}' for name,count in stats['sources']) or 'Источников пока нет')
         self.chart.set_data(stats)
+        insights=self.app.analytics.text_summary(self.range.currentData() or 30)
+        t=insights['totals']
+        today=insights['select_today']
+        previous=insights['select_last_week']
+        comparison=('на {:g}% {} прошлого такого же дня недели'.format(
+            abs((today-previous)*100/previous),
+            'больше, чем' if today>previous else 'меньше, чем')
+            if previous and today!=previous else
+            ('как и неделю назад' if previous else 'неделей ранее данных нет'))
+        self.fun.setText(
+            f"За период: {t.get('chars',0):,} символов, "
+            f"{t.get('russian',0):,} русских букв, "
+            f"{t.get('latin',0):,} латинских букв, "
+            f"{t.get('digits',0):,} цифр, {t.get('symbols',0):,} спецсимволов.\n"
+            f"Слово SELECT встречалось сегодня {today} раз — {comparison}.")
 
     def set_enabled(self,enabled):
         self.app.analytics.enabled=bool(enabled)
