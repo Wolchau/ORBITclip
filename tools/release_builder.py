@@ -79,7 +79,7 @@ def bundle(version):
 def incremental_patch(version):
     """Build only changed client modules since the preceding version."""
     import subprocess
-    oldtag='v7.4.2'
+    oldtag='v7.5.0'
     def git(*args):
         return subprocess.run(['git',*args],cwd=ROOT,check=True,capture_output=True).stdout
     try:
@@ -102,10 +102,17 @@ def incremental_patch(version):
         if body is not None: contents[rel.as_posix()]=body
     prefix='ORBITclip_Patch_v'+version.replace('.','_')+'/'
     output=ROOT/'dist'/(prefix.rstrip('/')+'.zip')
-    manifest={'app':'ORBITclip','from_version':'7.4.2','to_version':version,'changes':records}
+    manifest={'app':'ORBITclip','from_version':'7.5.0','to_version':version,'changes':records}
     with ZipFile(output,'w',compression=ZIP_DEFLATED,compresslevel=9) as z:
         z.writestr(prefix+'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
         z.write(ROOT/'tools'/'patch_installer.py',prefix+'apply_patch.py')
+        z.writestr(prefix+'apply_windows.bat',
+            '@echo off\r\ncd /d "%~dp0"\r\nwhere py >nul 2>nul && (py -3 apply_patch.py & goto END)\r\npython apply_patch.py\r\n:END\r\npause\r\n')
+        command=ZipInfo(prefix+'apply_mac.command')
+        command.create_system=3
+        command.external_attr=(0o100755 << 16)
+        command.compress_type=ZIP_DEFLATED
+        z.writestr(command,'#!/bin/bash\ncd "$(dirname "$0")" || exit 1\npython3 apply_patch.py\nread -r -p "Press Enter to close..." _\n')
         for path,body in contents.items(): z.writestr(prefix+'payload/'+path,body)
     print(output.name,output.stat().st_size,'bytes,',len(records),'files')
 
@@ -117,5 +124,7 @@ if __name__=='__main__':
     v=version()
     print('Checked version',v,'test credential policy')
     if not args.check_only:
-        bundle(v)
-        # v7.5 clean installation intentionally includes no incremental patch.
+        if v=='7.5.1':
+            incremental_patch(v)
+        else:
+            bundle(v)
