@@ -32,17 +32,19 @@ def next_target(previous: int, selected: int, count: int, step_hint: int = 0) ->
 
 def face_geometry(relative: float, *, center_x: float = 195.0,
                   center_y: float = 158.0, radius: float = 100.0,
-                  width: float = 346.0):
+                  width: float = 346.0, step_degrees: float = 49.0,
+                  half_degrees: float = 22.0):
     """Project a rectangular strip wrapped around a horizontal cylinder.
 
     Returns top/bottom widths and Y positions. The apparent height follows
     sin(angle) and naturally compresses towards both ends of the drum.
     """
-    angle = relative * FACE_STEP
+    angle = relative * math.radians(step_degrees)
     if abs(angle) > VISIBILITY_LIMIT:
         return None
-    start = max(-math.pi / 2, angle - FACE_HALF)
-    end = min(math.pi / 2, angle + FACE_HALF)
+    half = math.radians(half_degrees)
+    start = max(-math.pi / 2, angle - half)
+    end = min(math.pi / 2, angle + half)
     y0 = center_y + radius * math.sin(start)
     y1 = center_y + radius * math.sin(end)
     top_width = width * (0.875 + 0.125 * math.cos(start))
@@ -61,7 +63,10 @@ def face_geometry(relative: float, *, center_x: float = 195.0,
     }
 
 
-def visible_faces(cursor: float, *, count: int, extent: int = 3):
+def visible_faces(cursor: float, *, count: int, extent: int = 3,
+                  step_degrees: float = 49.0, half_degrees: float = 22.0,
+                  center_y: float = 158.0, radius: float = 100.0,
+                  width: float = 346.0):
     """Return sorted cylinder strips for a fractional cursor position."""
     if count <= 0:
         return []
@@ -69,7 +74,9 @@ def visible_faces(cursor: float, *, count: int, extent: int = 3):
     result = []
     for unwrapped in range(middle - extent, middle + extent + 2):
         relative = unwrapped - cursor
-        face = face_geometry(relative)
+        face = face_geometry(relative, step_degrees=step_degrees,
+                             half_degrees=half_degrees, center_y=center_y,
+                             radius=radius, width=width)
         if face is not None and face['height'] > 0.5:
             face['index'] = unwrapped % count
             face['unwrapped'] = unwrapped
