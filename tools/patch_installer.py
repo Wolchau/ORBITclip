@@ -8,6 +8,14 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import sys
+
+# When Windows launches Python with redirected output, stdout can default to
+# cp1252; printing Russian diagnostics would then crash the installer.
+if os.name=='nt':
+    for stream in (sys.stdout,sys.stderr):
+        if hasattr(stream,'reconfigure'):
+            stream.reconfigure(encoding='utf-8',errors='backslashreplace')
 
 HERE=Path(__file__).resolve().parent
 
