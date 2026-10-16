@@ -1953,7 +1953,7 @@ class PreferencesWindow(QWidget):
             self.drum_sliders.append(slider)
         drum_slider('Прозрачность барабана','opacity',35,100,'%')
         drum_slider('Видимость соседей','neighbor_opacity',5,100,'%')
-        drum_slider('Смещение соседей','neighbor_gap',0,65,' px')
+        drum_slider('Боковой отступ соседей','neighbor_gap',0,65,' px')
         drum_slider('Соседей с каждой стороны','neighbors',1,4)
         self.drum_controls=[self.drum_shape,self.drum_position,self.drum_header,
                             self.drum_header_place,self.drum_index,*self.drum_sliders]
