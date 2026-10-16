@@ -99,7 +99,7 @@ def patchable_path(rel):
 def incremental_patch(version):
     """Build only changed client modules since the preceding version."""
     import subprocess
-    oldtag='v7.6.1'
+    oldtag='v7.6.2'
     def git(*args):
         return subprocess.run(['git',*args],cwd=ROOT,check=True,capture_output=True).stdout
     try:
@@ -124,12 +124,12 @@ def incremental_patch(version):
     prefix='ORBITclip_Patch_v'+version.replace('.','_')+'/'
     (ROOT/'dist').mkdir(exist_ok=True)
     output=ROOT/'dist'/(prefix.rstrip('/')+'.zip')
-    manifest={'app':'ORBITclip','from_version':'7.6.1','to_version':version,'changes':records}
+    manifest={'app':'ORBITclip','from_version':'7.6.2','to_version':version,'changes':records}
     with ZipFile(output,'w',compression=ZIP_DEFLATED,compresslevel=9) as z:
         z.writestr(prefix+'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
         z.write(ROOT/'tools'/'patch_installer.py',prefix+'apply_patch.py')
         z.writestr(prefix+'apply_windows.bat',
-            '@echo off\r\ncd /d "%~dp0"\r\nwhere py >nul 2>nul && (py -3 apply_patch.py & goto END)\r\npython apply_patch.py\r\n:END\r\npause\r\n')
+            '@echo off\r\nchcp 65001 >nul\r\nset PYTHONUTF8=1\r\ncd /d "%~dp0"\r\nwhere py >nul 2>nul && (py -3 apply_patch.py & goto END)\r\npython apply_patch.py\r\n:END\r\npause\r\n')
         command=ZipInfo(prefix+'apply_mac.command')
         command.create_system=3
         command.external_attr=(0o100755 << 16)
@@ -147,5 +147,5 @@ if __name__=='__main__':
     print('Checked version',v,'test credential policy')
     if not args.check_only:
         bundle(v)
-        if v=='7.6.2':
+        if v=='7.6.3':
             incremental_patch(v)

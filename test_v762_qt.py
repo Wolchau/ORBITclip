@@ -70,7 +70,7 @@ class DrumAxisQtTests(unittest.TestCase):
 
     def test_shape_names_preserved_and_versioned(self):
         from orbit_version import CLIENT_VERSION
-        self.assertEqual(CLIENT_VERSION, "7.6.2")
+        self.assertEqual(CLIENT_VERSION, "7.6.3")
 
 
 if __name__ == "__main__":

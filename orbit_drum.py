@@ -548,8 +548,30 @@ class DrumBubble(QWidget):
             painter.restore()
         painter.restore()
 
+    def render_image(self):
+        """Render into a plain QImage without a native tool window.
+
+        Used by cross-platform visual regression tests; the onscreen paintEvent
+        calls the same scene painter, so both paths test identical geometry.
+        """
+        from PySide6.QtGui import QImage
+        output=QImage(self.size(),QImage.Format_ARGB32_Premultiplied)
+        output.fill(Qt.transparent)
+        painter=QPainter(output)
+        try:
+            self._render_scene(painter)
+        finally:
+            painter.end()
+        return output
+
     def paintEvent(self, event):
-        painter = QPainter(self)
+        painter=QPainter(self)
+        try:
+            self._render_scene(painter)
+        finally:
+            painter.end()
+
+    def _render_scene(self,painter):
         painter.setRenderHint(QPainter.Antialiasing, True)
         pal = self.app.palette
         painter.scale(self.width()/390.0,self.height()/302.0)
@@ -573,4 +595,3 @@ class DrumBubble(QWidget):
         else:
             self._paint_scene(painter, pal, self.heading, self.position,
                               self._entries, self._cursor, self._static_mode)
-        painter.end()
