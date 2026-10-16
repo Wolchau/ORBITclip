@@ -129,7 +129,7 @@ def incremental_patch(version):
         z.writestr(prefix+'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
         z.write(ROOT/'tools'/'patch_installer.py',prefix+'apply_patch.py')
         z.writestr(prefix+'apply_windows.bat',
-            '@echo off\r\ncd /d "%~dp0"\r\nwhere py >nul 2>nul && (py -3 apply_patch.py & goto END)\r\npython apply_patch.py\r\n:END\r\npause\r\n')
+            '@echo off\r\nchcp 65001 >nul\r\nset PYTHONUTF8=1\r\ncd /d "%~dp0"\r\nwhere py >nul 2>nul && (py -3 apply_patch.py & goto END)\r\npython apply_patch.py\r\n:END\r\npause\r\n')
         command=ZipInfo(prefix+'apply_mac.command')
         command.create_system=3
         command.external_attr=(0o100755 << 16)
