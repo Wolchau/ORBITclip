@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                              QPushButton, QFileDialog, QMessageBox)
+                              QPushButton, QFileDialog, QMessageBox, QLineEdit)
 
 from orbit_version import CLIENT_VERSION
 from orbit_update import (UpdateError, latest_release, download_release,
@@ -25,7 +25,7 @@ class UpdateWindow(QWidget):
         self.events=queue.Queue()
         self.busy=False
         self.setWindowTitle('ORBITclip · Обновления')
-        self.resize(530, 310)
+        self.resize(530, 365)
         self.setMinimumWidth(470)
         lay=QVBoxLayout(self);lay.setContentsMargins(23,23,23,20);lay.setSpacing(13)
         title=QLabel('Обновления ORBITclip')
@@ -42,6 +42,11 @@ class UpdateWindow(QWidget):
         warn.setWordWrap(True)
         warn.setStyleSheet('font-size:11px;opacity:0.7')
         lay.addWidget(warn)
+        self.auth=QLineEdit()
+        self.auth.setEchoMode(QLineEdit.Password)
+        self.auth.setPlaceholderText('Необязательно: GitHub-токен для приватного репозитория')
+        self.auth.setToolTip('Токен используется только для этой проверки и не сохраняется в настройках.')
+        lay.addWidget(self.auth)
         row=QHBoxLayout()
         self.check_button=QPushButton('Проверить')
         self.check_button.clicked.connect(self.check_updates)
@@ -81,18 +86,20 @@ class UpdateWindow(QWidget):
     def check_updates(self):
         self.release=None
         self.prepared=None
+        self._check_token=self.auth.text().strip()
         self._start(self._check_job)
 
     def _check_job(self):
-        return ('release',latest_release(CLIENT_VERSION))
+        return ('release',latest_release(CLIENT_VERSION, token=self._check_token))
 
     def fetch_update(self):
         if not self.release:
             return
+        self._check_token=self.auth.text().strip()
         self._start(self._download_job,self.release)
 
     def _download_job(self, release):
-        archive=download_release(release)
+        archive=download_release(release,token=self._check_token)
         try:
             result=stage_archive(archive,self.app_root)
             return ('prepared',result)
