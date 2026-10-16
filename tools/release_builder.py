@@ -49,25 +49,32 @@ def add_zip_member(zf, path, arcname):
 
 
 def bundle(version):
+    """Minimal clean first-install distribution: only app modules and runtime assets."""
     dist=ROOT/'dist';dist.mkdir(exist_ok=True)
-    out=dist/f'ORBITclip_Client_v{version.replace(".","_")}.zip'
-    allowed={'.py','.json','.txt','.md','.command','.bat','.svg','.png','.ico','.icns','.gif'}
-    with ZipFile(out,'w',compression=ZIP_DEFLATED,compresslevel=8) as z:
-        for p in sorted(ROOT.rglob('*')):
-            if not p.is_file() or p.suffix.lower() not in allowed:continue
-            rel=p.relative_to(ROOT)
-            if rel.parts[0] in ('.git','.github','tools','docs','patches','dist'):continue
-            if any(part in ('__pycache__','.venv') for part in rel.parts):continue
-            add_zip_member(z,p,arcname=str(Path('ORBITclip')/rel))
-    print(out.name,out.stat().st_size)
-    patch=ROOT/'patches'/('v'+version)
-    if patch.is_dir():
-        dest=dist/f'ORBITclip_Patch_v{version.replace(".","_")}.zip'
-        with ZipFile(dest,'w',compression=ZIP_DEFLATED,compresslevel=8) as z:
-            for p in files_in(patch):
-                add_zip_member(z,p,arcname=str(Path('ORBITclip_Patch_v'+version.replace('.','_'))/p.relative_to(patch)))
-        print(dest.name,dest.stat().st_size)
-
+    out=dist/f'ORBITclip_CleanInstall_v{version.replace(".","_")}.zip'
+    root_files=sorted(p for p in ROOT.glob('*.py') if not p.name.startswith('test_')
+                      and p.name!='orbit_capture.py')
+    root_files += [ROOT/n for n in ('requirements-client.txt','start_windows.bat',
+                                     'start_mac.command','client_defaults.json')]
+    root_files=[p for p in root_files if p.is_file()]
+    with ZipFile(out,'w',compression=ZIP_DEFLATED,compresslevel=9) as z:
+        for p in root_files:
+            arcname=str(Path('ORBITclip')/p.name)
+            if p.name=='client_defaults.json':
+                cfg=json.loads(p.read_text(encoding='utf-8'))
+                # An initial-install archive must never ship embedded relay credentials.
+                for key in ('https_token','remote_token','token'):
+                    if key in cfg:cfg[key]=''
+                z.writestr(arcname,json.dumps(cfg,ensure_ascii=False,indent=2))
+            else:add_zip_member(z,p,arcname)
+        for folder in ('assets',):
+            asset_dir=ROOT/folder
+            if not asset_dir.is_dir():continue
+            for p in files_in(asset_dir):
+                if p.suffix.lower() not in ('.png','.svg','.ico','.icns','.gif','.jpg','.jpeg','.webp'):
+                    continue
+                add_zip_member(z,p,str(Path('ORBITclip')/p.relative_to(ROOT)))
+    print(out.name,out.stat().st_size,'bytes,',len(root_files),'root files')
 
 def incremental_patch(version):
     """Build only changed client modules since the preceding version."""
@@ -111,4 +118,4 @@ if __name__=='__main__':
     print('Checked version',v,'test credential policy')
     if not args.check_only:
         bundle(v)
-        incremental_patch(v)
+        # v7.5 clean installation intentionally includes no incremental patch.
