@@ -27,7 +27,7 @@ jobs:
       - name: Build client and installer patch
         run: python tools/release_builder.py
       - name: Smoke-test release ZIP on prior client before publication
-        run: python tools/verify_release_upgrade.py dist/ORBITclip_Patch_v7_7_1.zip
+        run: python tools/verify_release_upgrade.py dist/ORBITclip_Patch_v7_8_0.zip
       - name: Publish only if version not released
         shell: bash
         env:

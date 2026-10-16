@@ -57,7 +57,8 @@ from orbit_drum_styles import DRUM_STYLES, normalize_drum_style
 from orbit_drum_layout import (DEFAULTS as DRUM_DEFAULTS, normalize_options as normalize_drum_options,
                                SHAPES, POSITIONS, HEADERS, HEADER_POSITIONS)
 from orbit_select import OrbitSelect
-from orbit_flow import PasteQueue, normalize_exclusions, is_excluded
+from orbit_flow import PasteQueue, QueuePresets, normalize_exclusions, is_excluded
+from orbit_queue_ui import PasteQueueWindow
 from orbit_global_shortcuts import FlowShortcuts
 from orbit_palette import CommandPalette
 from orbit_drum_preview import DrumLivePreview
@@ -266,6 +267,7 @@ class OrbitPill(QWidget):
             menu.addAction('История буфера',self.app.open_history)
             menu.addAction('⌕ Быстрый поиск и команды…',self.app.open_palette)
             menu.addAction('Вставить следующий из очереди',self.app.paste_next_from_queue)
+            menu.addAction('Редактор очереди вставки…',self.app.open_queue)
             menu.addAction('Связь и переписка',self.app.open_chat)
             menu.addAction('Устройства онлайн…',self.app.open_online)
             menu.addAction('Общие пространства…',self.app.open_workspaces)
@@ -646,6 +648,7 @@ class VaultWindow(QWidget):
         top=QHBoxLayout()
         title=QLabel('Библиотека фрагментов');title.setObjectName('heading')
         top.addWidget(title);top.addStretch()
+        top.addWidget(action('Очередь…',self.app.open_queue))
         top.addWidget(action('Пространства…',self.app.open_workspaces,icon_name='remote'))
         self.more_button=tool('settings','Дополнительные инструменты и настройки (категории, прокрутка…) ',self.open_tools_menu,20)
         self.more_button.setFixedSize(34,34)
@@ -706,6 +709,7 @@ class VaultWindow(QWidget):
             section.addAction(icon(icon_name),name,callback)
         add(menu,'settings','Управление категориями…',self.edit_categories)
         add(menu,'history','Порядок Ctrl + колесо…',self.app.edit_scroll_settings)
+        add(menu,'clipboard','Редактор очереди вставки…',self.app.open_queue)
         add(menu,'clipboard','Коллекции по приложениям…',self.choose_source_app)
         menu.addSeparator()
         add(menu,'remote','Управление пространствами…',self.app.open_workspaces)
@@ -2134,6 +2138,9 @@ class OrbitApp:
         self.excluded_apps=normalize_exclusions(self.settings.get('excluded_apps',[]))
         self.private_until=0.0
         self.paste_queue=PasteQueue()
+        self.queue_presets=QueuePresets()
+        self.queue_wheel_mode=False
+        self.queue_window=None
         self.vault=ClipboardVault()
         self.categories=CategoryModel(self.settings.get('orbit_categories'))
         self.categories.normalize_item_categories(self.vault)
@@ -2311,6 +2318,7 @@ class OrbitApp:
         hm.addAction('Открыть историю',lambda checked=False:self.open_history())
         hm.addAction('⌕ Быстрый поиск',lambda checked=False:self.open_palette())
         hm.addAction('Вставить следующий',lambda checked=False:self.paste_next_from_queue())
+        hm.addAction('Очередь вставки…',lambda checked=False:self.open_queue())
         hm.addAction('Пространства',lambda checked=False:self.open_workspaces())
         hm.addAction('Уведомления',lambda checked=False:self.open_notification_center())
         hm.addAction('Моя аналитика',lambda checked=False:self.open_analytics())
@@ -2424,6 +2432,7 @@ class OrbitApp:
         menu.addAction('История буфера',lambda checked=False:self.open_history())
         menu.addAction('⌕ Быстрый поиск',lambda checked=False:self.open_palette())
         menu.addAction('Вставить следующий',lambda checked=False:self.paste_next_from_queue())
+        menu.addAction('Очередь вставки…',lambda checked=False:self.open_queue())
         menu.addAction('Переписка',lambda checked=False:self.open_chat())
         menu.addAction('Устройства онлайн',lambda checked=False:self.open_online())
         menu.addAction('Общие пространства',lambda checked=False:self.open_workspaces())
@@ -2554,16 +2563,49 @@ class OrbitApp:
         if self.flow_palette is None:self.flow_palette=CommandPalette(self)
         self.flow_palette.open_palette()
 
+    def open_queue(self):
+        if self.queue_window is None:
+            self.queue_window=PasteQueueWindow(self)
+        self.queue_window.refresh()
+        self.queue_window.show()
+        self.queue_window.raise_()
+        self.queue_window.activateWindow()
+
+    def queue_changed(self):
+        if self.queue_window is not None and self.queue_window.isVisible():
+            self.queue_window.refresh()
+        if self.flow_palette is not None:
+            self.flow_palette.refresh()
+        # A persistent active wheel mode has no separate source of truth.
+        # The next wheel movement uses fresh queue state via candidates().
+        if self.switch_active and self.queue_wheel_mode:
+            self.draw_bubble()
+
+    def set_queue_wheel_mode(self,enabled):
+        enabled=bool(enabled)
+        if enabled and self.wheel_view!='drum':
+            self.set_wheel_view('drum')
+        if enabled==self.queue_wheel_mode:
+            return
+        self.switch_active=False
+        self.bubble.hide()
+        self.queue_wheel_mode=enabled
+        self.switch_index=0
+        self.queue_changed()
+
     def enqueue_item(self,ident):
         item=self.vault.find(ident)
         if not item or item.get('encrypted'):return
-        if self.paste_queue.push(item.get('text','')):
+        if self.paste_queue.push(item.get('text',''),
+                                 item.get('title') or item.get('kind','Фрагмент'),
+                                 source_id=ident):
             self.toast.pop(f'В очереди: {len(self.paste_queue)}')
+            self.queue_changed()
         else:self.toast.pop('Очередь заполнена или запись пуста')
 
     def clear_paste_queue(self):
         self.paste_queue.clear()
-        if self.flow_palette:self.flow_palette.refresh()
+        self.queue_changed()
         self.toast.pop('Очередь вставки очищена')
 
     def paste_next_from_queue(self):
@@ -2572,7 +2614,7 @@ class OrbitApp:
             self.toast.pop('Очередь вставки пуста')
             return
         self.copy_text(value)
-        if self.flow_palette:self.flow_palette.refresh()
+        self.queue_changed()
         QTimer.singleShot(190,lambda:self.try_paste())
 
     def open_sql_explorer(self):
@@ -3008,7 +3050,7 @@ class OrbitApp:
                 if not self.switch_active:self.switch_active=True;self.switch_category=0;self.switch_index=0
                 self.switch_index+=value
                 self.draw_bubble(value)
-            elif what=='category' and self.switch_active and self.switch_categories:
+            elif what=='category' and self.switch_active and self.switch_categories and not self.queue_wheel_mode:
                 # Wrap over the end and skip empty categories without hiding the popup.
                 self.switch_category=next_nonempty_category(
                     self.switch_categories,self.switch_category,
@@ -3018,7 +3060,14 @@ class OrbitApp:
                 item=self.selected_switch()
                 self.switch_active=False;self.bubble.hide()
                 if item and not item.get('encrypted'):
-                    self.copy_text(item.get('text',''))
+                    if self.queue_wheel_mode:
+                        consumed=self.paste_queue.take(item.get('id',''))
+                        if consumed is None:
+                            continue
+                        self.copy_text(consumed)
+                        self.queue_changed()
+                    else:
+                        self.copy_text(item.get('text',''))
                     self.analytics.record('wheel_commit')
                     if self.paste_on_release:
                         QTimer.singleShot(110,lambda:self.try_paste(0))
@@ -3026,6 +3075,9 @@ class OrbitApp:
                 self.switch_active=False;self.bubble.hide()
 
     def candidates(self):
+        if self.queue_wheel_mode:
+            return [{'id':item['uid'],'text':item['text'],
+                     'title':item['title']} for item in self.paste_queue.items()]
         if not self.switch_categories:return []
         category=self.switch_categories[self.switch_category%len(self.switch_categories)][0]
         return self.wheel_queue.candidates(self.vault.items,self.categories,category)
@@ -3036,13 +3088,17 @@ class OrbitApp:
 
     def draw_bubble(self, wheel_step=0):
         choices=self.candidates()
+        if not choices and self.queue_wheel_mode:
+            self.bubble.show_empty('Очередь вставки')
+            return
         if not choices:
             if self.switch_categories:
                 self.bubble.show_empty(self.switch_categories[self.switch_category%len(self.switch_categories)][1])
             else:self.bubble.hide()
             return
         self.switch_index %= len(choices)
-        cat_name=self.switch_categories[self.switch_category%len(self.switch_categories)][1]
+        cat_name=('Очередь вставки' if self.queue_wheel_mode else
+                  self.switch_categories[self.switch_category%len(self.switch_categories)][1])
         if isinstance(self.bubble,DrumBubble):
             self.bubble.show_neighbors(choices,self.switch_index,cat_name,step_hint=wheel_step)
         else:
