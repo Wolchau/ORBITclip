@@ -26,8 +26,8 @@ jobs:
       - name: Verify full cumulative package and runtime manifest
         run: |
           python tools/release_builder.py
-          python tools/verify_full_bundle.py dist/ORBITclip_CleanInstall_v7_8_2.zip
-          python -m unittest -v test_v782_snapshot
+          python tools/verify_full_bundle.py dist/ORBITclip_CleanInstall_v7_8_3.zip
+          python -m unittest -v test_v782_snapshot test_v783_extract
 
   qt-drum:
     name: Real Qt offscreen drum render
@@ -42,7 +42,7 @@ jobs:
       - name: Install PySide6
         run: python -m pip install 'PySide6>=6.7,<7'
       - name: Verify transparent Qt canvas and animated wheel
-        run: python -m unittest -v test_v741_qt test_v751_qt test_v760_qt test_v761_qt test_v762_qt test_v763_visual_qt test_v770_qt test_v780_qt
+        run: python -m unittest -v test_v741_qt test_v751_qt test_v760_qt test_v761_qt test_v762_qt test_v763_visual_qt test_v770_qt test_v780_qt test_v783_qt
 
   native-smoke:
     name: Native CI smoke · ${{ matrix.os }}
@@ -66,10 +66,10 @@ jobs:
       - name: Build and verify portable one-hop full package
         run: |
           python tools/release_builder.py
-          python tools/verify_full_bundle.py dist/ORBITclip_CleanInstall_v7_8_2.zip
+          python tools/verify_full_bundle.py dist/ORBITclip_CleanInstall_v7_8_3.zip
           python -m unittest -v test_v782_snapshot
       - name: Cross-platform visual QImage rendering (no native popup)
-        run: python -m unittest -v test_v763_visual_qt test_v770_qt test_v780_qt
+        run: python -m unittest -v test_v763_visual_qt test_v770_qt test_v780_qt test_v783_qt
       - name: Preserve drum screenshots for review
         if: always()
         uses: actions/upload-artifact@v4

@@ -45,6 +45,8 @@ from orbit_ui_logic import next_nonempty_category, parse_table_preview, safe_web
 from orbit_attachments import save_attachment
 from orbit_client_defaults import resolve_connection_settings
 from orbit_smart import smart_actions, action_catalog
+from orbit_extract_ui import ExtractDialog
+from orbit_semantic import find as semantic_find
 from orbit_context import foreground_app
 from orbit_workspaces import Workspaces
 from orbit_workspace_ui import WorkspaceWindow
@@ -597,6 +599,7 @@ class VaultRow(QFrame):
             add('history','Добавить в очередь вставки',lambda:self.window.app.enqueue_item(self.item_id))
         add('remote','Отправить устройству…',lambda:self.window.app.send_clip_item(self.item_id))
         if not item.get('encrypted'):
+            add('code','Извлечь данные…',lambda:self.window.extract_item(self.item_id))
             add('code','Умные действия…',lambda:self.window.smart_item(self.item_id))
             add('remote','Опубликовать в пространстве…',lambda:self.window.publish_item(self.item_id))
         m.addSeparator()
@@ -689,8 +692,17 @@ class VaultWindow(QWidget):
         self.app_strip.setWidget(self.app_buttons_host)
         self.app_buttons_signature=None
         main.addWidget(self.app_strip)
-        self.search=QLineEdit();self.search.setPlaceholderText('⌕  Найти фрагмент по названию, тексту или категории')
-        self.search.textChanged.connect(self.refresh);main.addWidget(self.search)
+        search_controls=QHBoxLayout()
+        self.search=QLineEdit()
+        self.search.setPlaceholderText('⌕  Найти по словам или смысловым подсказкам')
+        self.search.textChanged.connect(self.refresh)
+        search_controls.addWidget(self.search,1)
+        self.semantic_mode=QCheckBox('По смыслу · эксперимент')
+        self.semantic_mode.setToolTip('Локальный словарь русских и английских понятий. '
+                                      'Это предварительная версия, без нейросети и внешних сервисов.')
+        self.semantic_mode.toggled.connect(self.refresh)
+        search_controls.addWidget(self.semantic_mode)
+        main.addLayout(search_controls)
         self.counter=label('');main.addWidget(self.counter)
         hint=label('Двойной клик — копировать  ·  глаз — полный предпросмотр  ·  ★ — избранное')
         main.addWidget(hint)
@@ -825,6 +837,15 @@ class VaultWindow(QWidget):
         self.space_mode=mode
         self.refresh()
 
+    def extract_item(self,ident):
+        item=self.app.vault.find(ident)
+        if not item or item.get('encrypted'):
+            return error(self,'Нельзя анализировать защищённый фрагмент')
+        try:
+            ExtractDialog(self.app,item,self).exec()
+        except ValueError as exc:
+            error(self,str(exc))
+
     def smart_item(self,ident):
         item=self.app.vault.find(ident)
         if not item or item.get('encrypted'):return
@@ -938,13 +959,17 @@ class VaultWindow(QWidget):
                 self.rows.addWidget(line)
             self.rows.addStretch();return
         entries=[]
+        semantic=bool(needle and self.semantic_mode.isChecked())
         for v in self.app.vault.items:
             if not self.app.categories.matches(v,self.category):continue
             if source and (v.get('source_app') or 'Неизвестно')!=source:continue
             cat=self.app.categories.get(v.get('category',''))
             kind_name=LABELS.get(v.get('kind','text'),('','Текст'))[1]
             combined=' '.join((v.get('text',''),v.get('title',''),cat['name'] if cat else v.get('category',''),kind_name))
-            if needle in combined.casefold():entries.append(v)
+            if semantic:
+                if not v.get('encrypted'):entries.append(v)
+            elif needle in combined.casefold():entries.append(v)
+        if semantic:entries=semantic_find(needle,entries)
         self.counter.setText(f'{len(entries)} записей · {self.app.vault.favorite_count} избранных')
         if not entries:
             empty=label('В этой категории пока нет записей · попробуй другой фильтр')
@@ -979,6 +1004,7 @@ class VaultWindow(QWidget):
         bottom=QHBoxLayout()
         bottom.addWidget(action('Копировать',lambda:self.copy_item(ident)))
         if not encrypted:
+            bottom.addWidget(action('Извлечь данные…',lambda:self.extract_item(ident)))
             bottom.addWidget(action('В очередь',lambda:self.app.enqueue_item(ident)))
             bottom.addWidget(action('Преобразования…',lambda:self.smart_item(ident)))
         bottom.addStretch()
