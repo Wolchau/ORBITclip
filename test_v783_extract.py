@@ -63,8 +63,8 @@ class ExtractTests(unittest.TestCase):
                       [x['value'] for x in info['entities']])
         self.assertIn('2026-10-05',
                       [x['value'] for x in info['entities']])
-        self.assertIn('source',entity_rows(info['entities'])[0][1].lower()
-                      if False else 'source')  # schemas remain source-backed
+        self.assertEqual(entity_rows(info['entities'])[0],
+                         ['Тип','Исходное значение','Распознанное значение'])
 
 
 class SemanticHintsTests(unittest.TestCase):
