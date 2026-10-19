@@ -13,7 +13,7 @@ def validate_dropped_files(paths, limit=10):
                 rejected.append((p.name,"Не файл"));continue
             size=p.stat().st_size
             if size>MAX_FILE_SIZE:
-                rejected.append((p.name,"Больше 3 МБ"));continue
+                rejected.append((p.name,"Больше 40 МБ"));continue
             if len(valid)>=limit:
                 rejected.append((p.name,"Не больше 10 за отправку"));continue
             valid.append((p,size))
