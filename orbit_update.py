@@ -94,6 +94,18 @@ def _get_bytes(url, binary=False, maximum=MAX_ARCHIVE, token=None, progress=None
                 if progress:
                     progress(downloaded, total)
             data = b"".join(chunks)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 404):
+            raise UpdateError(
+                f"GitHub не дал доступ к релизам (HTTP {exc.code}). "
+                "Если репозиторий приватный, укажи GitHub-токен с правом чтения. "
+                "Также можно загрузить ZIP вручную через «Выбрать ZIP…».") from exc
+        if exc.code in (403, 429):
+            raise UpdateError(
+                f"GitHub отклонил запрос (HTTP {exc.code}). "
+                "Возможны ограничения доступа или лимит API. "
+                "Попробуй позже либо выбери ZIP вручную.") from exc
+        raise UpdateError(f"GitHub вернул ошибку HTTP {exc.code}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise UpdateError("Не удалось связаться с GitHub: " + str(exc)) from exc
     if len(data) > maximum:
