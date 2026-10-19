@@ -56,6 +56,12 @@ class TransferTests(unittest.TestCase):
             payload_sizes=[]
             def relay(payload):
                 record_number[0]+=1
+                if payload['kind']=='file_probe':
+                    probe=decrypt_message(encrypt_message(payload,KEY),KEY)
+                    sender.acknowledge({'kind':'file_ack','transfer_id':probe['transfer_id'],
+                                         'index':-1},
+                                       {'id':record_number[0],'ts':time.time()})
+                    return
                 message=encrypt_message(payload,KEY)
                 payload_sizes.append(len(message))
                 self.assertLessEqual(len(message),MAX_PACKET_SIZE)
@@ -94,6 +100,11 @@ class TransferTests(unittest.TestCase):
             sender=FileSender(wait=.01,retries=3)
             count=[0]
             def relay(packet):
+                if packet['kind']=='file_probe':
+                    sender.acknowledge({'kind':'file_ack',
+                                        'transfer_id':packet['transfer_id'],'index':-1},
+                                        {'id':4})
+                    return
                 count[0]+=1
                 saved,created=receiver.accept(packet)
                 if count[0]>=2:
@@ -134,6 +145,25 @@ class TransferTests(unittest.TestCase):
             data['index']=1
             with self.assertRaises(ValueError):
                 validate_control(data)
+
+    def test_old_receiver_never_gets_large_chunks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'big.bin'
+            path.write_bytes(os.urandom(4*MiB))
+            sender=FileSender(wait=.01,retries=2)
+            seen=[]
+            sender.start(path,lambda packet:seen.append(packet['kind']))
+            until=time.monotonic()+3
+            result=None
+            while time.monotonic()<until:
+                try:ev=sender.events.get(timeout=.05)
+                except Exception:continue
+                if ev[0]=='error':
+                    result=ev
+                    break
+            self.assertIsNotNone(result)
+            self.assertIn('не поддерживает',result[3])
+            self.assertEqual(seen,['file_probe','file_probe'])
 
     def test_large_message_packet_not_mistaken_for_legacy_file(self):
         packet={'kind':'file_chunk','transfer_id':'b'*32,'name':'example.bin',
