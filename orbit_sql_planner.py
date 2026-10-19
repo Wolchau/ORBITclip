@@ -212,6 +212,13 @@ class SQLPlanner:
                 raise PlanError("Неизвестная сохранённая метрика: "+name)
             table=definition["table"]
             if table not in aliases:raise PlanError("Источник метрики не подключён: "+table)
+            # v7.8.6 metric definitions contain explanatory prose, not a
+            # structured WHERE formula. Refuse silently ignoring exclusions.
+            description=str(definition.get("description") or "")
+            if re.search(r"(?i)\\b(?:только|исключая|исключить|исключение|без|статус|фильтр|если|where|except|exclude|only)\\b",description):
+                raise PlanError("Определение метрики «"+name+
+                    "» содержит условие/исключение, которое пока не формализовано. "
+                    "Нельзя безопасно строить SUM/COUNT без этого фильтра.")
             agg=definition["aggregation"]
             if agg=="COUNT_ROWS":expression="COUNT(*)"
             else:
