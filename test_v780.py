@@ -10,7 +10,7 @@ from orbit_version import CLIENT_VERSION
 
 class VisualQueueTests(unittest.TestCase):
     def test_version_and_legacy_pop_semantics(self):
-        self.assertEqual(CLIENT_VERSION,'7.8.7')
+        self.assertEqual(CLIENT_VERSION,'7.8.8')
         q=PasteQueue()
         self.assertTrue(q.push('A'))
         self.assertTrue(q.push('B'))
