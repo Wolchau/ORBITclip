@@ -10,7 +10,7 @@ from orbit_drum_geometry import visible_faces
 
 class DrumLayoutTests(unittest.TestCase):
     def test_761_version_defaults_and_shapes(self):
-        self.assertEqual(CLIENT_VERSION, "7.8.6")
+        self.assertEqual(CLIENT_VERSION, "7.8.7")
         self.assertEqual(len(SHAPES),4)
         self.assertEqual(shape_size(None), (318,226))
         self.assertLess(shape_size({"shape":"compact"})[0],shape_size({"shape":"classic"})[0])
