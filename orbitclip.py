@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 
 from kinetic_clipboard import ClipboardVault, LABELS, ACCENTS, private_write
 from kinetic_remote import (
-    RemoteBridge, MessageStore, decrypt_message, make_pair_code,
+    RemoteBridge, MessageStore, encrypt_message, decrypt_message, make_pair_code,
     validate_config, http_json, MAX_FILE_SIZE
 )
 from kinetic_pairing import PairingBridge
@@ -43,6 +43,7 @@ from orbit_categories import CategoryModel, WheelQueue, ICONS, category_click_ha
 from orbit_peers import DeviceIdentity, PeerDirectory
 from orbit_ui_logic import next_nonempty_category, parse_table_preview, safe_web_url
 from orbit_attachments import save_attachment
+from orbit_file_transfer import FileSender, FileReceiver, LEGACY_FILE_SIZE
 from orbit_client_defaults import resolve_connection_settings
 from orbit_smart import smart_actions, action_catalog
 from orbit_extract_ui import ExtractDialog
@@ -1123,7 +1124,7 @@ class MessageBubble(QFrame):
             summary.setStyleSheet(f"background:{theme['surface']};color:{theme['muted']};border-left:2px solid {theme['accent']};border-radius:4px;padding:5px;font-size:10px;")
             inner.addWidget(summary)
         kind=content.get('kind')
-        if kind=='file':
+        if kind in ('file','file_ref'):
             name=str(content.get('name','attachment'))
             line=QHBoxLayout();line.setSpacing(7)
             file_ico=QLabel('▣');file_ico.setStyleSheet('color:'+theme['accent']+';font-size:22px;')
@@ -1188,10 +1189,10 @@ class MessageBubble(QFrame):
             button=tool(name,tooltip,callback,15)
             button.setFixedSize(25,23)
             tools.addWidget(button)
-        if kind=='file' and self.saved_path and self.saved_path.is_file():
+        if kind in ('file','file_ref') and self.saved_path and self.saved_path.is_file():
             add_button('document','Открыть файл',self.open_saved_file)
             add_button('history','Показать в папке',self.show_folder)
-        elif kind!='file':
+        elif kind not in ('file','file_ref'):
             add_button('copy','Скопировать сообщение',lambda:self.app.copy_text(str(content.get('text',''))))
         if self.on_reply is not None:
             add_button('send','Ответить',lambda:self.on_reply(self.content,self.own))
@@ -1228,7 +1229,7 @@ class MessageBubble(QFrame):
         if self.on_reply:menu.addAction('Ответить',lambda:self.on_reply(self.content,self.own))
         if self.on_forward:menu.addAction('Переслать…',lambda:self.on_forward(self.content))
         if self.on_delete:menu.addAction('Удалить у себя',self.on_delete)
-        if self.content.get('kind')=='file' and getattr(self,'saved_path',None):
+        if self.content.get('kind') in ('file','file_ref') and getattr(self,'saved_path',None):
             menu.addAction('Открыть файл',self.open_saved_file)
         menu.exec(self.mapToGlobal(at))
 
@@ -1404,7 +1405,7 @@ class ChatWindow(QWidget):
         self.reply_bar.hide();right.addWidget(self.reply_bar)
         composer=QFrame();composer.setObjectName('chatComposer')
         compose_row=QHBoxLayout(composer);compose_row.setContentsMargins(10,8,10,8);compose_row.setSpacing(8)
-        compose_row.addWidget(tool('document','Прикрепить файл (до 3 МБ)',self.send_file))
+        compose_row.addWidget(tool('document','Прикрепить файл (до 40 МБ)',self.send_file))
         compose_row.addWidget(tool('clipboard','Отправить содержимое буфера',self.send_clipboard))
         self.compose=ChatComposer(self.send_text,file_callback=self.send_files)
         self.compose.setObjectName('chatInput')
@@ -1462,7 +1463,7 @@ class ChatWindow(QWidget):
             if last:
                 try:
                     payload=decrypt_message(last[0]['payload'],secret)
-                    snippet=('📎 '+str(payload.get('name','Файл'))) if payload.get('kind')=='file' else truncate(payload.get('text',''),38)
+                    snippet=('📎 '+str(payload.get('name','Файл'))) if payload.get('kind') in ('file','file_ref') else truncate(payload.get('text',''),38)
                 except Exception:snippet='Зашифрованное сообщение'
             online=peer in {p.get('id') for p in self.app.online_devices}
             status='●' if online else '○'
@@ -1713,7 +1714,7 @@ class ChatWindow(QWidget):
                     and not record.get('saved_path')):
                 saved=self.app.save_incoming_attachment(place,record,content)
                 if saved:record['saved_path']=str(saved)
-            origin=content.get('origin','clipboard' if content.get('kind')=='file' else 'chat')
+            origin=content.get('origin','clipboard' if content.get('kind') in ('file','file_ref') else 'chat')
             if channel!='all' and channel!=origin:continue
             if needle and needle not in (str(content.get('text',''))+' '+str(content.get('name',''))).casefold():continue
             day=datetime.fromtimestamp(record['ts']).strftime('%d.%m.%Y')
@@ -1751,7 +1752,7 @@ class ChatWindow(QWidget):
             QTimer.singleShot(35,lambda pos=old_pos:bar.setValue(min(pos,bar.maximum())))
 
     def reply_to_message(self,content,own):
-        text=content.get('text') if content.get('kind')!='file' else '📎 '+str(content.get('name','Файл'))
+        text=content.get('text') if content.get('kind') not in ('file','file_ref') else '📎 '+str(content.get('name','Файл'))
         self.reply_to={'own':bool(own),'text':truncate(str(text or ''),130)}
         self.reply_label.setText('Ответ на '+('своё сообщение' if own else 'сообщение собеседника')+': '+truncate(str(text or ''),72))
         self.reply_bar.show();self.compose.setFocus()
@@ -1766,6 +1767,8 @@ class ChatWindow(QWidget):
         self.refresh_messages();self.refresh_dialog_list()
 
     def forward_message(self,content):
+        if content.get('kind')=='file_ref':
+            return error(self,'Для пересылки большого файла выбери его заново через прикрепление.')
         choices=[(record.get('name',p[:10]),p) for p,record in self.app.identity.trusted.items()]
         if self.app.remote_config:choices.append(('Старая пара · PIN','legacy'))
         if not choices:return error(self,'Нет подключённых устройств')
@@ -1796,7 +1799,7 @@ class ChatWindow(QWidget):
         self.app.send_to_active({'kind':'text','text':value,'origin':'clipboard'})
 
     def send_file(self):
-        file,_=QFileDialog.getOpenFileName(self,'Отправить файл (до 3 МБ)')
+        file,_=QFileDialog.getOpenFileName(self,'Отправить файл (до 40 МБ)')
         if file:self.send_files([file])
 
     def send_files(self,paths):
@@ -1804,7 +1807,7 @@ class ChatWindow(QWidget):
         if not self.app.active_channel()[0]:return error(self,'Сначала выбери получателя')
         valid,rejected=validate_dropped_files(paths)
         if not valid:
-            return error(self,'Нет подходящих файлов. Максимальный размер каждого — 3 МБ.')
+            return error(self,'Нет подходящих файлов. Максимальный размер каждого — 40 МБ.')
         review=FileReviewDialog(valid,rejected,self)
         if review.exec()!=QDialog.Accepted:
             return
@@ -1815,14 +1818,27 @@ class ChatWindow(QWidget):
                 if not file.is_file() or file.stat().st_size>MAX_FILE_SIZE:
                     error(self,f'«{file.name}»: файл изменён или слишком велик')
                     continue
-                raw=file.read_bytes()
-                if len(raw)>MAX_FILE_SIZE:continue
+                # Never read the entire 40 MiB into Qt's UI thread.
+                size=file.stat().st_size
+                if size>LEGACY_FILE_SIZE:
+                    raw=None
+                else:
+                    raw=file.read_bytes()
+                    if len(raw)>MAX_FILE_SIZE:continue
             except OSError as exc:
                 error(self,f'Не удалось прочитать «{file.name}»: {exc}')
                 continue
-            ok=self.app.send_to_active({
-                'kind':'file','origin':'clipboard','name':file.name,
-                'bytes':base64.b64encode(raw).decode('ascii')})
+            if size>LEGACY_FILE_SIZE:
+                try:
+                    self.app.send_large_file(file)
+                    ok=True
+                except (OSError,ValueError) as exc:
+                    error(self,'Не удалось отправить большой файл: '+str(exc))
+                    ok=False
+            else:
+                ok=self.app.send_to_active({
+                    'kind':'file','origin':'clipboard','name':file.name,
+                    'bytes':base64.b64encode(raw).decode('ascii')})
             if not ok:break
             sent+=1
         if sent:self.app.toast.pop(f'Отправлено в очередь передачи: {sent}')
@@ -2172,6 +2188,9 @@ class OrbitApp:
         self.categories.normalize_item_categories(self.vault)
         self.store=MessageStore()
         self.attachment_errors=[]
+        self.file_sender=FileSender()
+        receive_root=QStandardPaths.writableLocation(QStandardPaths.DownloadLocation)
+        self.file_receiver=FileReceiver((Path(receive_root) if receive_root else Path.home()/'Downloads')/'ORBITclip')
         self.url,self.token=resolve_connection_settings(self.settings,ROOT/'client_defaults.json',DEFAULT_RELAY_URL)
         self.tls_pin=str(self.settings.get('https_tls_pin') or self.settings.get('remote_tls_pin') or '')
         self.remote_pair=str(self.settings.get('remote_pair') or self.settings.get('https_pair') or '')
@@ -2838,6 +2857,87 @@ class OrbitApp:
         if not self.selected_peer and self.identity.trusted:
             self.selected_peer=next(iter(self.identity.trusted))
 
+    def send_large_file(self,path):
+        """Queue a streaming transfer; never encode large files on Qt thread."""
+        if self.offline:
+            raise ValueError('Приложение работает оффлайн')
+        cfg,place,secret=self.active_channel()
+        if not cfg:
+            raise ValueError('Сначала выбери подключённое устройство')
+        bridge=(self.peer_bridges.get(self.selected_peer)
+                if self.selected_peer in self.peer_bridges else self.bridge)
+        tid=self.file_sender.start(path,bridge.send,
+               {'place':place,'secret':secret})
+        self.toast.pop('Файл передаётся частями; получатель должен быть онлайн')
+        return tid
+
+    def process_file_packet(self,decoded,record,direction,bridge,place,secret):
+        """Consume transport control packets; do not cache chunks in history."""
+        kind=decoded.get('kind')
+        if kind=='file_ack':
+            if direction=='in':
+                try:self.file_sender.acknowledge(decoded,record)
+                except ValueError:pass
+            return True
+        if kind!='file_chunk':
+            return False
+        if direction=='out':
+            return True
+        try:
+            saved,created=self.file_receiver.accept(decoded)
+            if saved is not None and created:
+                reference={'kind':'file_ref','name':decoded['name'],
+                           'size':decoded['size'],
+                           'transfer_id':decoded['transfer_id'],
+                           'origin':'chat'}
+                entry={'id':record['id'],'ts':record['ts'],
+                       'device':record['device'],
+                       'payload':encrypt_message(reference,secret)}
+                if self.store.put(place,entry,'in'):
+                    self.store.set_saved_path(place,entry['id'],str(saved))
+                    self.note_incoming('peer','file')
+                    if self.chat and self.chat.isVisible():
+                        self.chat.refresh_messages()
+                        self.chat.refresh_dialog_list()
+            # Only acknowledge AFTER the chunk is durably accepted on disk.
+            bridge.send({'kind':'file_ack','transfer_id':decoded['transfer_id'],
+                         'index':decoded['index']})
+        except (OSError,ValueError) as exc:
+            self.attachment_errors.append((place,int(record['id']),str(exc)))
+            if self.chat:
+                self.chat.connection_hint.setText('Передача файла: '+truncate(str(exc),100))
+        return True
+
+    def process_file_sender_events(self):
+        for _ in range(30):
+            try:event=self.file_sender.events.get_nowait()
+            except queue.Empty:break
+            kind=event[0]
+            if kind=='progress':
+                _,tid,name,done,total=event
+                if self.chat:
+                    self.chat.connection_hint.setText(
+                        f'Передача {truncate(name,45)}: {done}/{total} частей')
+            elif kind=='error':
+                _,tid,name,message=event
+                self.toast.pop('Передача не завершена: '+truncate(message,85))
+                if self.chat:self.chat.connection_hint.setText(
+                    'Ошибка передачи '+truncate(name,30)+': '+truncate(message,80))
+            elif kind=='complete':
+                _,tid,path,size,receipt,context=event
+                if receipt and context:
+                    message={'kind':'file_ref','name':path.name,'size':size,
+                             'transfer_id':tid,'origin':'chat'}
+                    entry={'id':receipt['id'],'ts':time.time(),
+                           'device':self.device,
+                           'payload':encrypt_message(message,context['secret'])}
+                    if self.store.put(context['place'],entry,'out'):
+                        self.store.set_saved_path(context['place'],entry['id'],str(path))
+                self.toast.pop('Файл доставлен: '+path.name)
+                if self.chat and self.chat.isVisible():
+                    self.chat.refresh_messages()
+                    self.chat.refresh_dialog_list()
+
     def send_to_peer(self,peer,payload):
         if self.offline:return False
         if payload.get('origin')!='workspace':self.analytics.record('file_out' if payload.get('kind')=='file' else 'chat_out')
@@ -2939,6 +3039,8 @@ class OrbitApp:
                     if decoded.get('origin')=='workspace':
                         if direction=='in':self.handle_workspace_message(ident,decoded)
                         continue
+                    if self.process_file_packet(decoded,record,direction,bridge,place,key):
+                        continue
                     if self.store.put(place,record,direction):
                         if ident==self.selected_peer:refresh=True
                         if direction=='in':
@@ -3008,6 +3110,7 @@ class OrbitApp:
             self.keepalive_stop.wait(10)
 
     def pump_events(self):
+        self.process_file_sender_events()
         self.pump_directory()
         self.process_peer_events()
         for _ in range(20):
@@ -3034,6 +3137,11 @@ class OrbitApp:
                 room=ev[3] if event=='received' else ev[2]
                 if room!=self.remote_config['room']:continue
                 direction='out' if record.get('device')==self.device else 'in'
+                try:decoded=decrypt_message(record['payload'],self.remote_pair)
+                except Exception:decoded={}
+                if self.process_file_packet(decoded,record,direction,
+                                            self.bridge,self.cursor_place,self.remote_pair):
+                    continue
                 if self.store.put(self.cursor_place,record,direction):
                     refresh=True
                     if direction=='in':
@@ -3153,6 +3261,7 @@ class OrbitApp:
             return None
 
     def shutdown(self):
+        self.file_sender.stop()
         self.events.stop();self.keepalive_stop.set()
         self.qt.removeEventFilter(self.local_wheel_filter)
         self.directory.stop();self.pair_bridge.stop();self.bridge.stop()
