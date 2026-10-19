@@ -2904,9 +2904,12 @@ class OrbitApp:
                     if self.chat and self.chat.isVisible():
                         self.chat.refresh_messages()
                         self.chat.refresh_dialog_list()
-            # Only acknowledge AFTER the chunk is durably accepted on disk.
-            bridge.send({'kind':'file_ack','transfer_id':decoded['transfer_id'],
-                         'index':decoded['index']})
+            # Final ACK is allowed only if the full SHA-256 verified file
+            # already exists; prevents false success after receiver restart.
+            if (decoded['index'] < decoded['total']-1
+                    or self.file_receiver.is_completed(decoded['transfer_id'])):
+                bridge.send({'kind':'file_ack','transfer_id':decoded['transfer_id'],
+                             'index':decoded['index']})
         except (OSError,ValueError) as exc:
             self.attachment_errors.append((place,int(record['id']),str(exc)))
             if self.chat:
