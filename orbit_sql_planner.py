@@ -175,7 +175,9 @@ class SQLPlanner:
             fc=_str(j["from_column"]);tc=_str(j["to_column"])
             join_type=j["join_type"]
             if join_type not in JOIN_TYPES:raise PlanError("Только INNER/LEFT JOIN")
-            if frm not in aliases or to in aliases or to not in self.allowed:
+            if to not in self.allowed:
+                raise PlanError("Таблица вне выбранной рабочей схемы: "+to)
+            if frm not in aliases or to in aliases:
                 raise PlanError("JOIN должен вести из уже присоединённой таблицы")
             self._column(frm,fc);self._column(to,tc)
             cardinality=_relation(self,frm,fc,to,tc)
