@@ -24,7 +24,7 @@ class SQLProject:
     def __init__(self, key, directory=None):
         if not key.isalnum():raise ValueError('Invalid project ID')
         self.path=Path(directory or PROJECT_DIR)/(key+'.json')
-        self.data={'selected':[],'comments':{},'joins':[],'positions':{}}
+        self.data={'selected':[],'comments':{},'joins':[],'positions':{},'business':{}}
         if self.path.exists():
             found=json.loads(self.path.read_text('utf-8'))
             if isinstance(found,dict):
