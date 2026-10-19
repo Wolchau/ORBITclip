@@ -62,14 +62,40 @@ def validate_snapshot_manifest(manifest):
 
 
 def latest_snapshot_release(current, token=None):
-    metadata = json.loads(_get_bytes(API + "/releases/latest", maximum=1_000_000, token=token))
-    version = str(metadata.get("tag_name", "")).removeprefix("v")
-    if version_tuple(version) <= version_tuple(current):
+    """Select highest published stable version, not GitHub's mutable 'latest' flag.
+
+    GitHub's /releases/latest may lag publication or point to an explicitly
+    selected older release. Never report 'up to date' based on that flag.
+    """
+    current_tuple = version_tuple(current)
+    raw = _get_bytes(API + "/releases?per_page=50", maximum=2_000_000, token=token)
+    releases = json.loads(raw)
+    if not isinstance(releases, list):
+        raise UpdateError("GitHub вернул неожиданный формат списка релизов")
+    candidates = []
+    for metadata in releases:
+        if not isinstance(metadata, dict) or metadata.get("draft") or metadata.get("prerelease"):
+            continue
+        version = str(metadata.get("tag_name", "")).removeprefix("v")
+        try:
+            parsed = version_tuple(version)
+        except UpdateError:
+            continue
+        if parsed > current_tuple:
+            candidates.append((parsed, version, metadata))
+    if not candidates:
         return None
+    _, version, metadata = max(candidates, key=lambda item: item[0])
     name = "ORBITclip_CleanInstall_v" + version.replace(".", "_") + ".zip"
-    asset = next((a for a in metadata.get("assets", []) if a.get("name") == name), None)
+    assets = metadata.get("assets") or []
+    if not isinstance(assets, list):
+        raise UpdateError("GitHub вернул некорректный список файлов релиза")
+    asset = next((a for a in assets if isinstance(a, dict)
+                  and a.get("name") == name and int(a.get("size") or 0)>0), None)
     if not asset:
-        raise UpdateError("В последнем релизе отсутствует полный пакет. Попробуй позднее.")
+        raise UpdateError(
+            f"Релиз {version} опубликован, но полный архив {name} пока недоступен. "
+            "Проверь страницу релиза или повтори попытку позднее.")
     return {"version":version, "url":str(asset.get("url","")),
             "size":int(asset.get("size",0)),
             "digest":str(asset.get("digest") or "")}
