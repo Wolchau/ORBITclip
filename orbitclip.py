@@ -2874,6 +2874,11 @@ class OrbitApp:
     def process_file_packet(self,decoded,record,direction,bridge,place,secret):
         """Consume transport control packets; do not cache chunks in history."""
         kind=decoded.get('kind')
+        if kind=='file_probe':
+            if direction=='in':
+                bridge.send({'kind':'file_ack','transfer_id':decoded['transfer_id'],
+                             'index':-1})
+            return True
         if kind=='file_ack':
             if direction=='in':
                 try:self.file_sender.acknowledge(decoded,record)
