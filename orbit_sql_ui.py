@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QWidget,QHBoxLayout,QVBoxLayout,QFormLayout,QLine
 from PySide6.QtGui import QPainterPath
 from orbit_sql_core import PostgreSQLCatalog,SQLProject,profile_key
 from orbit_sql_business_ui import BusinessSemanticsPanel
+from orbit_sql_ai_ui import LocalSQLWorkspace
 
 
 class ERNode(QGraphicsRectItem):
@@ -48,7 +49,7 @@ class SQLExplorer(QWidget):
         left=QVBoxLayout();layout.addLayout(left,0)
         left.addWidget(QLabel('SQL Explorer'))
         self.navigation=QListWidget();self.navigation.setFixedWidth(170)
-        self.pages=['Подключение','Таблицы','Поля','Связи','ER-схема','Бизнес-семантика']
+        self.pages=['Подключение','Таблицы','Поля','Связи','ER-схема','Бизнес-семантика','Спросить данные ✧']
         self.navigation.addItems(self.pages);left.addWidget(self.navigation)
         self.content=QVBoxLayout();layout.addLayout(self.content,1)
         self.title=QLabel('Подключение');self.content.addWidget(self.title)
@@ -100,6 +101,7 @@ class SQLExplorer(QWidget):
         elif index==3:self.show_relations()
         elif index==4:self.show_graph()
         elif index==5:self.show_business_semantics()
+        elif index==6:self.show_local_sql()
 
     def selected_keys(self):
         return self.project.data['selected'] if self.project else []
@@ -209,6 +211,30 @@ class SQLExplorer(QWidget):
             self.business_panel=editor
         except Exception as exc:
             QMessageBox.warning(self,'Бизнес-семантика',str(exc)[:450])
+
+    def show_local_sql(self):
+        self._replace()
+        outer=QVBoxLayout(self.panel)
+        outer.setContentsMargins(0,0,0,0)
+        keys=self.selected_keys()
+        if not keys:
+            label=QLabel('Сначала выбери рабочие таблицы, затем заполни '
+                         'бизнес-описания в разделе «Бизнес-семантика».')
+            label.setWordWrap(True)
+            outer.addWidget(label)
+            return
+        try:
+            for key in keys:
+                if key not in self.columns:
+                    self.columns[key]=self.db.columns(*key.split('.',1))
+            if not self.fks:
+                self.fks=self.db.foreign_keys(keys)
+            editor=LocalSQLWorkspace(self.project,self.catalog,
+                                     self.columns,self.fks,self.panel)
+            outer.addWidget(editor)
+            self.local_sql_panel=editor
+        except Exception as exc:
+            QMessageBox.warning(self,'Спросить данные',str(exc)[:450])
 
     def show_graph(self):
         self._replace();outer=QVBoxLayout(self.panel)
