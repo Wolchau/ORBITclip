@@ -80,10 +80,12 @@ def validate_control(packet):
         # Avoid copying the 2 MiB binary content: this function is used
         # only after authenticated AES-GCM decryption.
         _checked_chunk(packet)
+    elif kind=='file_probe':
+        _identity(packet.get('transfer_id'))
     elif kind=='file_ack':
         _identity(packet.get('transfer_id'))
         i=packet.get('index')
-        if not isinstance(i,int) or isinstance(i,bool) or not 0<=i<MAX_CHUNKS:
+        if not isinstance(i,int) or isinstance(i,bool) or not -1<=i<MAX_CHUNKS:
             raise ValueError('Некорректное подтверждение части файла')
     elif kind=='file_ref':
         _identity(packet.get('transfer_id'))
@@ -143,6 +145,19 @@ class FileSender:
             size=state['size']
             sha=_digest_file(path)
             total=(size+CHUNK_BYTES-1)//CHUNK_BYTES
+            # Capability handshake BEFORE a large packet reaches older clients.
+            state['index']=-1
+            state['signal'].clear()
+            probe={'kind':'file_probe','transfer_id':state['id']}
+            ready=False
+            for attempt in range(2):
+                send(probe)
+                if state['signal'].wait(min(self.wait,8)):
+                    ready=True
+                    break
+            if not ready:
+                raise TimeoutError('Получатель не поддерживает файлы до 40 МБ '
+                                   'или недоступен. Обнови ORBITclip на втором устройстве.')
             with path.open('rb') as stream:
                 for index in range(total):
                     if self.stopping.is_set():raise RuntimeError('Передача отменена')
