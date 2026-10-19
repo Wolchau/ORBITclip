@@ -216,6 +216,9 @@ class FileReceiver:
             if now-state['seen']>TRANSFER_TIMEOUT:
                 del self.completed[tid]
 
+    def is_completed(self,transfer_id):
+        return transfer_id in self.completed
+
     def accept(self,packet):
         tid,name,size,index,total,sha,chunk=_checked_chunk(packet)
         self._cleanup()
@@ -266,6 +269,10 @@ class FileReceiver:
                 break
             except FileExistsError:
                 continue
+            except BaseException:
+                # Never expose a truncated file as successfully downloaded.
+                candidate.unlink(missing_ok=True)
+                raise
         else:
             raise IOError('Слишком много файлов с одинаковым именем')
         state['tmp'].unlink(missing_ok=True)
