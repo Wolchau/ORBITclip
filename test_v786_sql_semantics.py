@@ -40,7 +40,7 @@ class SemanticModelTests(unittest.TestCase):
         self.logic=BusinessSemantics(self.project,CATALOG,COLUMNS)
 
     def test_version(self):
-        self.assertEqual(CLIENT_VERSION,"7.8.7")
+        self.assertEqual(CLIENT_VERSION,"7.8.8")
 
     def test_table_field_definitions_survive_restart(self):
         self.logic.save_table("public.sales","Продажи",

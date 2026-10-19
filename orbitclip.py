@@ -48,6 +48,7 @@ from orbit_client_defaults import resolve_connection_settings
 from orbit_smart import smart_actions, action_catalog
 from orbit_extract_ui import ExtractDialog
 from orbit_semantic import find as semantic_find
+from orbit_history_view import history_matches, visible_page, PAGE_SIZE
 from orbit_context import foreground_app
 from orbit_workspaces import Workspaces
 from orbit_workspace_ui import WorkspaceWindow
@@ -629,6 +630,11 @@ class VaultWindow(QWidget):
         self.setWindowIcon(QIcon(str(ASSETS/'orbit_icon.png')))
         self.resize(1060,640)
         self.setMinimumWidth(720)
+        self._view_signature=None
+        self.render_limit=PAGE_SIZE
+        self.search_timer=QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.timeout.connect(self.refresh)
         self.build()
 
     def build(self):
@@ -696,13 +702,20 @@ class VaultWindow(QWidget):
         search_controls=QHBoxLayout()
         self.search=QLineEdit()
         self.search.setPlaceholderText('⌕  Найти по словам или смысловым подсказкам')
-        self.search.textChanged.connect(self.refresh)
+        self.search.textChanged.connect(self.on_search_changed)
         search_controls.addWidget(self.search,1)
         self.semantic_mode=QCheckBox('По смыслу · эксперимент')
         self.semantic_mode.setToolTip('Локальный словарь русских и английских понятий. '
                                       'Это предварительная версия, без нейросети и внешних сервисов.')
         self.semantic_mode.toggled.connect(self.refresh)
         search_controls.addWidget(self.semantic_mode)
+        self.period_combo=QComboBox()
+        for title,value in [('За всё время','all'),('Сегодня','today'),
+                            ('7 дней','week'),('30 дней','month')]:
+            self.period_combo.addItem(title,value)
+        self.period_combo.setToolTip('Показывать записи за выбранный период')
+        self.period_combo.currentIndexChanged.connect(self.refresh)
+        search_controls.addWidget(self.period_combo)
         main.addLayout(search_controls)
         self.counter=label('');main.addWidget(self.counter)
         hint=label('Двойной клик — копировать  ·  глаз — полный предпросмотр  ·  ★ — избранное')
@@ -918,66 +931,99 @@ class VaultWindow(QWidget):
         self.app.toast.pop('Фрагмент отправлен участникам онлайн · офлайн-очереди пока нет')
         self.refresh()
 
+    def on_search_changed(self,*_):
+        # Do not instantiate hundreds of QWidget cards for every keystroke.
+        self.search_timer.start(160)
+
+    def show_more(self):
+        self.render_limit+=PAGE_SIZE
+        self.refresh()
+
     def refresh(self):
         if not hasattr(self,'rows'):return
+        needle=self.search.text().casefold().strip()
+        source=self.source_app if self.space_mode=='apps' else ''
+        period=self.period_combo.currentData() or 'all'
+        semantic=bool(needle and self.semantic_mode.isChecked())
+        signature=(self.space_mode,self.category,source,period,needle,
+                   semantic,self.selected_workspace)
+        changed=signature!=self._view_signature
+        old_scroll=0 if changed else self.scroll.verticalScrollBar().value()
+        if changed:
+            self.render_limit=PAGE_SIZE
+            self._view_signature=signature
         while self.rows.count():
             child=self.rows.takeAt(0)
             if child.widget():child.widget().deleteLater()
-        needle=self.search.text().casefold().strip()
         if hasattr(self,'personal_tab'):
             self.personal_tab.setObjectName('primary' if self.space_mode=='personal' else '')
             self.apps_tab.setObjectName('primary' if self.space_mode=='apps' else '')
             self.shared_tab.setObjectName('primary' if self.space_mode=='shared' else '')
             for tab in (self.personal_tab,self.apps_tab,self.shared_tab):
                 tab.style().unpolish(tab);tab.style().polish(tab)
-        sources=tuple(sorted({str(x.get('source_app') or 'Неизвестно') for x in self.app.vault.items},key=str.casefold))
-        # Category panel is stable across new clipboard items and search refreshes.
-        # Rebuilding it on each clipboard event breaks mouse navigation.
+        sources=tuple(sorted({str(x.get('source_app') or 'Неизвестно')
+                              for x in self.app.vault.items},key=str.casefold))
         for key,button in self.nav.items():
             button.setProperty('chosen','true' if key==self.category else 'false')
             button.style().unpolish(button);button.style().polish(button)
         self.mark_source_active()
         self.refresh_workspace_strip()
-        source=self.source_app if self.space_mode=='apps' else ''
         if self.space_mode=='apps' and source and source not in sources:
-            self.source_app='';source=''
+            self.source_app=''
+            source=''
         if self.space_mode=='shared':
             wid=self.selected_workspace
             space=self.app.workspaces.spaces.get(wid,{})
             clips=space.get('clips',[])
-            matches=[x for x in clips if needle in (x.get('text','')+' '+x.get('title','')).casefold()]
-            self.counter.setText(f'{len(matches)} опубликованных записей · источник: общее пространство')
+            matches=[x for x in reversed(clips)
+                     if needle in (x.get('text','')+' '+x.get('title','')).casefold()]
+            shown,remaining=visible_page(matches,self.render_limit)
+            self.counter.setText(
+                f'Показано {len(shown)} из {len(matches)} опубликованных записей')
             if not matches:
-                self.rows.addWidget(label('Здесь ещё нет опубликованных фрагментов. Открой личную историю и выбери «Опубликовать…».'))
-            for c in reversed(matches):
+                self.rows.addWidget(label('Здесь ещё нет опубликованных фрагментов. '
+                                          'Открой личную историю и выбери «Опубликовать…».'))
+            for c in shown:
                 line=QFrame();line.setObjectName('card')
                 hl=QHBoxLayout(line)
                 title=c.get('title') or c.get('kind','Текст')
                 sender=c.get('sender','')
-                owner_name=('Я' if sender==self.app.identity.id else self.app.identity.trusted.get(sender,{}).get('name',sender[:8]))
+                owner_name=('Я' if sender==self.app.identity.id else
+                            self.app.identity.trusted.get(sender,{}).get('name',sender[:8]))
                 hl.addWidget(label(truncate(title+' · '+owner_name+' · '+c.get('text',''),170)),1)
-                hl.addWidget(action('Копировать',lambda _=False,v=c['text']:self.app.copy_text(v)))
+                hl.addWidget(action('Копировать',
+                                    lambda _=False,v=c['text']:self.app.copy_text(v)))
                 self.rows.addWidget(line)
-            self.rows.addStretch();return
-        entries=[]
-        semantic=bool(needle and self.semantic_mode.isChecked())
-        for v in self.app.vault.items:
-            if not self.app.categories.matches(v,self.category):continue
-            if source and (v.get('source_app') or 'Неизвестно')!=source:continue
-            cat=self.app.categories.get(v.get('category',''))
-            kind_name=LABELS.get(v.get('kind','text'),('','Текст'))[1]
-            combined=' '.join((v.get('text',''),v.get('title',''),cat['name'] if cat else v.get('category',''),kind_name))
-            if semantic:
-                if not v.get('encrypted'):entries.append(v)
-            elif needle in combined.casefold():entries.append(v)
-        if semantic:entries=semantic_find(needle,entries)
-        self.counter.setText(f'{len(entries)} записей · {self.app.vault.favorite_count} избранных')
-        if not entries:
-            empty=label('В этой категории пока нет записей · попробуй другой фильтр')
-            empty.setAlignment(Qt.AlignCenter);self.rows.addWidget(empty)
-        for item in entries:self.rows.addWidget(VaultRow(self,item))
-        self.rows.addStretch()
-
+            if remaining:
+                self.rows.addWidget(action(f'Показать ещё {min(PAGE_SIZE,remaining)} '
+                                            f'· осталось {remaining}',self.show_more))
+            self.rows.addStretch()
+        else:
+            entries=history_matches(
+                self.app.vault.items,needle,source,period,semantic,
+                category_match=lambda v:self.app.categories.matches(v,self.category))
+            shown,remaining=visible_page(entries,self.render_limit)
+            self.counter.setText(
+                f'Показано {len(shown)} из {len(entries)} записей · '
+                f'{self.app.vault.favorite_count} избранных')
+            if not entries:
+                empty=label('Записей не найдено · измени период или условия поиска')
+                empty.setAlignment(Qt.AlignCenter)
+                self.rows.addWidget(empty)
+            for item in shown:
+                self.rows.addWidget(VaultRow(self,item))
+            if remaining:
+                self.rows.addWidget(action(f'Показать ещё {min(PAGE_SIZE,remaining)} '
+                                            f'· осталось {remaining}',self.show_more))
+            self.rows.addStretch()
+        if changed:
+            self.scroll.verticalScrollBar().setValue(0)
+        else:
+            # Defer until Qt has recalculated row layout, preserve browsing
+            # position after a clipboard event, favourite edit or load-more.
+            QTimer.singleShot(0,lambda value=old_scroll:
+                self.scroll.verticalScrollBar().setValue(
+                    min(value,self.scroll.verticalScrollBar().maximum())))
 
     def preview_item(self,ident):
         """Readable large text preview; never expose encrypted content."""
