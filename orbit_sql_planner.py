@@ -103,7 +103,11 @@ class SQLPlanner:
         self._fks=list(fks)
         self.tables={t["schema"]+"."+t["name"]:t
                      for t in business.catalog}
-        self.allowed=set(business.project.data.get("selected",[]))
+    @property
+    def allowed(self):
+        # Working-table selection can change while the editor is open.
+        # Never compile against a stale metadata authorization snapshot.
+        return set(self.business.project.data.get("selected", []))
 
     def context(self):
         """No rows, credentials or raw data; context bound to selected tables."""
