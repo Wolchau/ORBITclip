@@ -52,7 +52,8 @@ Never execute anything. Do not include an SQL string, markdown, or reasoning.
 
 
 def _check_model(name):
-    if not isinstance(name,str) or not MODEL_PATTERN.fullmatch(name):
+    if (not isinstance(name,str) or "://" in name
+            or not MODEL_PATTERN.fullmatch(name)):
         raise PlanError("Некорректное имя локальной модели Ollama")
     return name
 
