@@ -105,6 +105,7 @@ class FileSender:
         self.active={}
         self.lock=threading.Lock()
         self.stopping=threading.Event()
+        self.slots=threading.Semaphore(2)
 
     def start(self,path,send,context=None):
         path=Path(path)
@@ -112,8 +113,8 @@ class FileSender:
         if not path.is_file() or not 1<=stat.st_size<=MAX_FILE_SIZE:
             raise ValueError('Допустимый размер файла — до 40 МБ')
         with self.lock:
-            if len(self.active)>=2:
-                raise ValueError('Уже выполняются две передачи. Заверши одну из них.')
+            if len(self.active)>=10:
+                raise ValueError('В очереди уже десять файлов')
             tid=secrets.token_hex(16)
             state={'id':tid,'path':path,'size':stat.st_size,
                    'mtime':stat.st_mtime_ns,'index':-1,'signal':threading.Event(),
@@ -137,6 +138,8 @@ class FileSender:
     def _run(self,state,send):
         path=state['path']
         try:
+            self.slots.acquire()
+            if self.stopping.is_set():raise RuntimeError('Передача отменена')
             size=state['size']
             sha=_digest_file(path)
             total=(size+CHUNK_BYTES-1)//CHUNK_BYTES
@@ -171,6 +174,7 @@ class FileSender:
         except Exception as exc:
             self.events.put(('error',state['id'],path.name,str(exc)))
         finally:
+            self.slots.release()
             with self.lock:self.active.pop(state['id'],None)
 
     def stop(self):
