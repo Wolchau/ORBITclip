@@ -215,7 +215,7 @@ class SQLPlanner:
             # v7.8.6 metric definitions contain explanatory prose, not a
             # structured WHERE formula. Refuse silently ignoring exclusions.
             description=str(definition.get("description") or "")
-            if re.search(r"(?i)\\b(?:только|исключая|исключить|исключение|без|статус|фильтр|если|where|except|exclude|only)\\b",description):
+            if re.search(r"(?i)\b(?:только|исключая|исключить|исключение|без|статус|фильтр|если|where|except|exclude|only)\b",description):
                 raise PlanError("Определение метрики «"+name+
                     "» содержит условие/исключение, которое пока не формализовано. "
                     "Нельзя безопасно строить SUM/COUNT без этого фильтра.")
