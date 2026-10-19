@@ -19,13 +19,13 @@ import urllib.request
 import zlib
 from pathlib import Path
 from kinetic_clipboard import private_write
+from orbit_file_transfer import MAX_FILE_SIZE, LEGACY_FILE_SIZE, validate_control
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from kinetic_transport import pinned_request, valid_pin
 from orbit_tls import public_urlopen
 from orbit_version import CLIENT_VERSION
 
-MAX_FILE_SIZE = 3 * 1024 * 1024
 MAX_TEXT_SIZE = 200_000
 MAX_PACKET_SIZE = 7 * 1024 * 1024
 DB_PATH = Path.home() / '.kinetic_messages.json'
@@ -48,7 +48,7 @@ def derive_key(pair_code):
 def encrypt_message(data, pair_code):
     plain = json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     if len(plain) > MAX_PACKET_SIZE:
-        raise ValueError('Слишком большое сообщение (максимум 3 МБ для файлов).')
+        raise ValueError('Слишком большое сообщение для одного пакета.')
     compressed = zlib.compress(plain, level=4)
     nonce = secrets.token_bytes(12)
     encrypted = AESGCM(derive_key(pair_code)).encrypt(nonce, compressed, b'KINETIC1')
@@ -65,7 +65,7 @@ def decrypt_message(packet, pair_code):
     if not decompressor.eof or len(data) > MAX_PACKET_SIZE or decompressor.unconsumed_tail:
         raise ValueError('Слишком большой или повреждённый пакет')
     obj = json.loads(data.decode('utf-8'))
-    if not isinstance(obj, dict) or obj.get('kind') not in ('text', 'file'):
+    if not isinstance(obj, dict) or obj.get('kind') not in ('text', 'file', 'file_probe', 'file_chunk', 'file_ack', 'file_ref'):
         raise ValueError('Неизвестный формат сообщения')
     if obj['kind'] == 'text' and (not isinstance(obj.get('text'), str) or len(obj['text']) > MAX_TEXT_SIZE):
         raise ValueError('Некорректный текст')
@@ -74,10 +74,12 @@ def decrypt_message(packet, pair_code):
         content = obj.get('bytes')
         if not isinstance(filename, str) or not isinstance(content, str) or len(filename) > 250:
             raise ValueError('Некорректный файл')
-        if len(content) > ((MAX_FILE_SIZE + 2) // 3 * 4 + 4):
+        if len(content) > ((LEGACY_FILE_SIZE + 2) // 3 * 4 + 4):
             raise ValueError('Файл слишком большой')
-        if len(base64.b64decode(content, validate=True)) > MAX_FILE_SIZE:
+        if len(base64.b64decode(content, validate=True)) > LEGACY_FILE_SIZE:
             raise ValueError('Файл слишком большой')
+    if obj['kind'] in ('file_probe','file_chunk','file_ack','file_ref'):
+        validate_control(obj)
     return obj
 
 
@@ -120,11 +122,12 @@ def http_json(config, method, path, payload=None):
         'Content-Type': 'application/json',
         'User-Agent': 'ORBITclip/'+CLIENT_VERSION,
     })
+    timeout = 45 if data is not None and len(data) > 1024*1024 else 15
     if config.get('tls_pin'):
         result = pinned_request(config['url'],method,path,data,dict(req.header_items()),
-                                config['tls_pin'],timeout=9)
+                                config['tls_pin'],timeout=timeout)
     else:
-        with public_urlopen(req, timeout=9) as response:
+        with public_urlopen(req, timeout=timeout) as response:
             if int(response.headers.get('Content-Length') or 0) > 9 * 1024 * 1024:
                 raise ValueError('Ответ сервера слишком большой')
             result = response.read(9 * 1024 * 1024 + 1)

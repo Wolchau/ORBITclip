@@ -18,7 +18,7 @@ from orbit_messenger_logic import validate_dropped_files
 
 class UpdateCoreTests(unittest.TestCase):
     def test_version_and_safe_paths(self):
-        self.assertEqual(CLIENT_VERSION,'7.8.3')
+        self.assertEqual(CLIENT_VERSION,'7.8.4')
         self.assertLess(version_tuple('v7.6.3'),version_tuple('7.7.0'))
         self.assertEqual(str(safe_path('orbit_drum.py')),'orbit_drum.py')
         for bad in ('README.md','../settings.json','client_defaults.json',
@@ -103,7 +103,7 @@ class UpdateCoreTests(unittest.TestCase):
             a=Path(tmp)/'small.txt';a.write_text('hello')
             b=Path(tmp)/'oversize.bin'
             with b.open('wb') as out:
-                out.truncate(4_000_000)
+                out.truncate(42_500_000)
             accepted,rejected=validate_dropped_files([a,b])
             self.assertEqual([item[0].name for item in accepted],['small.txt'])
             self.assertEqual(len(rejected),1)

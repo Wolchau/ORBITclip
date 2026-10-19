@@ -18,10 +18,14 @@ class FileReviewDialog(QDialog):
         title.setStyleSheet("font-weight:700;font-size:16px")
         layout.addWidget(title)
         total=sum(size for _,size in files)
-        details=QLabel(f"Размер: {total/1024:.1f} КБ · каждому файлу установлен лимит 3 МБ. "
+        details=QLabel(f"Размер: {total/1024/1024:.1f} МБ · каждому файлу установлен лимит 40 МБ. "
                        "Отправка выполняется только после подтверждения.")
         details.setWordWrap(True)
         layout.addWidget(details)
+        transfer=QLabel("Большие файлы передаются зашифрованными частями. "
+                        "Оба клиента должны быть версии 7.8.4 или новее; получатель должен быть онлайн.")
+        transfer.setWordWrap(True)
+        layout.addWidget(transfer)
         listings=QListWidget()
         for path,size in files:
             listings.addItem(QListWidgetItem(f"📎  {path.name}    ·    {size/1024:.1f} КБ"))
