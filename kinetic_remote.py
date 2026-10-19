@@ -65,7 +65,7 @@ def decrypt_message(packet, pair_code):
     if not decompressor.eof or len(data) > MAX_PACKET_SIZE or decompressor.unconsumed_tail:
         raise ValueError('Слишком большой или повреждённый пакет')
     obj = json.loads(data.decode('utf-8'))
-    if not isinstance(obj, dict) or obj.get('kind') not in ('text', 'file', 'file_chunk', 'file_ack', 'file_ref'):
+    if not isinstance(obj, dict) or obj.get('kind') not in ('text', 'file', 'file_probe', 'file_chunk', 'file_ack', 'file_ref'):
         raise ValueError('Неизвестный формат сообщения')
     if obj['kind'] == 'text' and (not isinstance(obj.get('text'), str) or len(obj['text']) > MAX_TEXT_SIZE):
         raise ValueError('Некорректный текст')
@@ -78,7 +78,7 @@ def decrypt_message(packet, pair_code):
             raise ValueError('Файл слишком большой')
         if len(base64.b64decode(content, validate=True)) > LEGACY_FILE_SIZE:
             raise ValueError('Файл слишком большой')
-    if obj['kind'] in ('file_chunk','file_ack','file_ref'):
+    if obj['kind'] in ('file_probe','file_chunk','file_ack','file_ref'):
         validate_control(obj)
     return obj
 
