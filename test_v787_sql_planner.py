@@ -167,6 +167,16 @@ class PlanCompilerTests(unittest.TestCase):
         with self.assertRaisesRegex(PlanError,"дублировать"):
             self.compiler.compile(plan)
 
+    def test_business_exclusions_cannot_be_silently_ignored(self):
+        self.semantics.save_metric("Оплаченная выручка","public.sales","amount","SUM",
+                                    "Сумма только оплаченных, без возвратов")
+        plan=base_plan()
+        plan["metrics"]=[{"name":"Оплаченная выручка"}]
+        plan["having"]=[]
+        plan["order_by"]=[]
+        with self.assertRaisesRegex(PlanError,"не формализовано"):
+            self.compiler.compile(plan)
+
     def test_only_strict_structure_accepted(self):
         plan=base_plan()
         plan["sql"]="DROP TABLE sales;"
