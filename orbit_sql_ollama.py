@@ -70,11 +70,15 @@ def make_request(question,context,model="qwen3:4b",answer=""):
     question=_check_question(question)
     if not isinstance(context,dict) or not context.get("tables"):
         raise PlanError("Не выбраны таблицы и бизнес-контекст")
+    payload=json.dumps(
+        {"question":question,"business_context":context,
+         "clarification":str(answer or "")[:1000]},ensure_ascii=False)
+    if len(payload.encode("utf-8"))>80_000:
+        raise PlanError("Бизнес-контекст превышает 80 КБ. Сократи рабочий набор "
+                        "таблиц или длинные описания перед запросом к Ollama.")
     messages=[
         {"role":"system","content":SYSTEM_INSTRUCTIONS},
-        {"role":"user","content":json.dumps(
-            {"question":question,"business_context":context,
-             "clarification":str(answer or "")[:1000]},ensure_ascii=False)}
+        {"role":"user","content":payload}
     ]
     return {"model":name,"stream":False,"think":False,"format":"json",
             "messages":messages,"options":{"temperature":0,"num_predict":1800}}
