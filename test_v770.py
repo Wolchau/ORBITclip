@@ -18,7 +18,7 @@ from orbit_messenger_logic import validate_dropped_files
 
 class UpdateCoreTests(unittest.TestCase):
     def test_version_and_safe_paths(self):
-        self.assertEqual(CLIENT_VERSION,'7.8.5')
+        self.assertEqual(CLIENT_VERSION,'7.8.6')
         self.assertLess(version_tuple('v7.6.3'),version_tuple('7.7.0'))
         self.assertEqual(str(safe_path('orbit_drum.py')),'orbit_drum.py')
         for bad in ('README.md','../settings.json','client_defaults.json',
