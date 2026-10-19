@@ -103,7 +103,7 @@ class UpdateCoreTests(unittest.TestCase):
             a=Path(tmp)/'small.txt';a.write_text('hello')
             b=Path(tmp)/'oversize.bin'
             with b.open('wb') as out:
-                out.truncate(4_000_000)
+                out.truncate(42_500_000)
             accepted,rejected=validate_dropped_files([a,b])
             self.assertEqual([item[0].name for item in accepted],['small.txt'])
             self.assertEqual(len(rejected),1)
