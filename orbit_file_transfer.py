@@ -205,6 +205,17 @@ class FileReceiver:
         self.clock=clock
         self.active={}
         self.completed={}
+        # Previous crashes may leave orphaned private .part files. Only
+        # remove known transfer-name patterns older than one day.
+        incomplete=self.folder/'.orbitclip_incomplete'
+        if incomplete.is_dir() and not incomplete.is_symlink():
+            for candidate in incomplete.glob('*.part'):
+                tid=candidate.name[:-5]
+                if (len(tid)==32 and all(c in '0123456789abcdef' for c in tid)):
+                    try:
+                        if time.time()-candidate.lstat().st_mtime>86400:
+                            candidate.unlink()
+                    except OSError:pass
 
     def _cleanup(self):
         now=self.clock()
