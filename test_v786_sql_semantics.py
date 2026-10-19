@@ -97,7 +97,7 @@ class SemanticModelTests(unittest.TestCase):
             self.logic.compile_metric('Сумма "особая"','id); DELETE FROM sales')
         with self.assertRaises(ValueError):
             self.logic.save_metric("Bad","public.sales","price","SUM);DROP")
-        self.assertEqual(quote_ident('col"name'),' "col" "'.replace(' ',''))
+        self.assertEqual(quote_ident('col"name'),'"col""name"')
 
     def test_relation_and_glossary_persist(self):
         key=self.logic.save_relation(
