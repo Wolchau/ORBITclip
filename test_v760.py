@@ -12,7 +12,7 @@ CORE=(ROOT/'orbitclip.py').read_text('utf-8')
 
 class FlowTests(unittest.TestCase):
     def test_version_and_nonpersistent_bounded_queue(self):
-        self.assertEqual(CLIENT_VERSION,'7.8.3')
+        self.assertEqual(CLIENT_VERSION,'7.8.4')
         queue=PasteQueue()
         self.assertIsNone(queue.pop())
         self.assertFalse(queue.push(''))
