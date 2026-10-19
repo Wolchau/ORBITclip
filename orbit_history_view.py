@@ -10,7 +10,7 @@ from kinetic_clipboard import LABELS
 from orbit_semantic import find as semantic_find
 
 PAGE_SIZE=40
-MAX_PAGE_SIZE=400
+MAX_PAGE_SIZE=5000
 PERIODS=("all","today","week","month")
 
 
