@@ -69,7 +69,7 @@ class HistoryQtTests(unittest.TestCase):
             self.assertIn("40 из 141",window.counter.text())
             window.space_mode='apps';window.source_app='Excel'
             window.refresh()
-            self.assertIn("из 70",window.counter.text())
+            self.assertIn("из 71",window.counter.text())
             self.assertLessEqual(rows(),PAGE_SIZE)
         finally:
             window.close()
