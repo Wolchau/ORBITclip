@@ -44,6 +44,7 @@ from orbit_peers import DeviceIdentity, PeerDirectory
 from orbit_ui_logic import next_nonempty_category, parse_table_preview, safe_web_url
 from orbit_attachments import save_attachment
 from orbit_file_transfer import FileSender, FileReceiver, LEGACY_FILE_SIZE
+from orbit_delivery import DurableOutbox
 from orbit_client_defaults import resolve_connection_settings
 from orbit_smart import smart_actions, action_catalog
 from orbit_extract_ui import ExtractDialog
@@ -1222,7 +1223,7 @@ class MessageBubble(QFrame):
         # so the bubble never changes height when action buttons appear.
         foot=QHBoxLayout();foot.setContentsMargins(0,0,0,0);foot.setSpacing(0)
         foot.addStretch(1)
-        when=QLabel(('✓ ' if own else '')+stamp)
+        when=QLabel((('✓✓ ' if content.get('_delivered') else '◷ ') if own and content.get('delivery_id') else ('✓ ' if own else ''))+stamp)
         when.setStyleSheet('color:'+theme['muted']+';font-size:9px;')
         foot.addWidget(when)
         inner.addLayout(foot)
@@ -1418,9 +1419,11 @@ class ChatWindow(QWidget):
         info=QVBoxLayout();info.setSpacing(2)
         self.peer_name=QLabel('Выбери диалог')
         self.peer_name.setStyleSheet('font-size:14px;font-weight:700;')
-        self.connection_hint=label('Для доставки оба устройства должны быть онлайн. · v'+CLIENT_VERSION)
+        self.connection_hint=label('Для доставки дождись подтверждения второго устройства · v'+CLIENT_VERSION)
         info.addWidget(self.peer_name);info.addWidget(self.connection_hint)
         heading.addLayout(info,1)
+        self.delivery_button=action('Очередь · 0',self.show_delivery_queue)
+        heading.addWidget(self.delivery_button)
         heading.addWidget(tool('settings','Управление подключениями',lambda:self.set_page(1)))
         right.addWidget(bar)
         filters=QHBoxLayout();filters.setSpacing(5)
@@ -1760,6 +1763,8 @@ class ChatWindow(QWidget):
                     and not record.get('saved_path')):
                 saved=self.app.save_incoming_attachment(place,record,content)
                 if saved:record['saved_path']=str(saved)
+            if record.get('delivery_id'):
+                content['_delivered']=bool(record.get('delivered'))
             origin=content.get('origin','clipboard' if content.get('kind') in ('file','file_ref') else 'chat')
             if channel!='all' and channel!=origin:continue
             if needle and needle not in (str(content.get('text',''))+' '+str(content.get('name',''))).casefold():continue
@@ -1827,8 +1832,32 @@ class ChatWindow(QWidget):
         if self.app.send_to_peer(peer,payload):self.app.toast.pop('Пересылаем выбранному устройству…')
         else:error(self,'Не удалось выбрать подключённое устройство')
 
+    def show_delivery_queue(self):
+        rows=self.app.delivery_outbox.list()
+        if not rows:
+            return QMessageBox.information(self,'Очередь доставки',
+                'Недоставленных текстовых сообщений нет.')
+        names=[]
+        for item in rows:
+            target=self.app.identity.trusted.get(item['peer'],{}).get('name','Другая пара')
+            state=('Ожидает подтверждения' if item['state']=='awaiting_receipt'
+                   else 'Ожидает отправки')
+            names.append(f"{target} · {state} · попыток: {item['attempts']} · {item['id'][:8]}")
+        choice,ok=QInputDialog.getItem(self,'Очередь доставки',
+            'Выбери сообщение. Отмена удаляет его только из исходящей очереди:',
+            names,0,False)
+        if not ok:return
+        item=rows[names.index(choice)]
+        if QMessageBox.question(self,'Отмена доставки',
+            'Удалить выбранную недоставленную отправку из очереди?')==QMessageBox.Yes:
+            self.app.delivery_outbox.cancel(item['id'])
+            self.update_delivery_count()
+
+    def update_delivery_count(self):
+        count=self.app.delivery_outbox.pending_count()
+        self.delivery_button.setText(f'Очередь · {count}')
+
     def send_text(self):
-        if self.app.offline:return error(self,'В настройках включён режим оффлайн')
         text=self.compose.toPlainText().strip()
         if not text:return
         if not self.app.active_channel()[0]:return error(self,'Выбери подключённое устройство')
@@ -1838,7 +1867,6 @@ class ChatWindow(QWidget):
             self.compose.clear();self.cancel_reply()
 
     def send_clipboard(self):
-        if self.app.offline:return error(self,'В настройках включён режим оффлайн')
         value=self.app.clipboard.text()
         if not value:return error(self,'Буфер пуст')
         if not self.app.active_channel()[0]:return error(self,'Выбери получателя')
@@ -2233,6 +2261,9 @@ class OrbitApp:
         self.categories=CategoryModel(self.settings.get('orbit_categories'))
         self.categories.normalize_item_categories(self.vault)
         self.store=MessageStore()
+        self.delivery_outbox=DurableOutbox()
+        self.delivery_capabilities={}
+        self.delivery_probe_at={}
         self.attachment_errors=[]
         self.file_sender=FileSender()
         receive_root=QStandardPaths.writableLocation(QStandardPaths.DownloadLocation)
@@ -2917,13 +2948,100 @@ class OrbitApp:
         self.toast.pop('Файл передаётся частями; получатель должен быть онлайн')
         return tid
 
+    def process_delivery_packet(self,decoded,record,direction,bridge,place,secret,peer_id='legacy'):
+        kind=decoded.get('kind')
+        if kind=='delivery_ack':
+            if direction=='in' and decoded.get('mode')=='probe':
+                self.delivery_capabilities[place]=time.monotonic()+30
+                return True
+            if direction=='in':
+                uid=decoded['delivery_id']
+                self.delivery_outbox.acknowledge(place,uid)
+                self.store.mark_delivered(place,uid)
+                if self.chat:
+                    self.chat.update_delivery_count()
+                    if self.chat.isVisible():
+                        self.chat.refresh_messages()
+            return True
+        if kind!='delivery_text':
+            return False
+        uid=decoded['delivery_id']
+        # Normalize transport envelope into legacy user-facing chat text.
+        content=dict(decoded)
+        content['kind']='text'
+        local=dict(record)
+        local['payload']=encrypt_message(content,secret)
+        if self.store.put(place,local,direction,delivery_id=uid):
+            if direction=='in':
+                self.note_incoming(peer_id,'text')
+            if self.chat and self.chat.isVisible():
+                self.chat.refresh_dialog_list()
+                self.chat.refresh_messages()
+        if direction=='in':
+            # A duplicate retry must also receive its acknowledgement.
+            bridge.send({'kind':'delivery_ack','delivery_id':uid})
+        elif direction=='out':
+            self.delivery_outbox.submitted(uid)
+        return True
+
+    def drain_delivery_outbox(self):
+        if self.offline:
+            return
+        for item in self.delivery_outbox.due(limit=2):
+            peer=item['peer']
+            if peer=='legacy':
+                bridge=self.bridge if self.remote_config and self.cursor_place==item['place'] else None
+            else:
+                cfg,place,_=self.peer_channel(peer)
+                bridge=self.peer_bridges.get(peer) if cfg and place==item['place'] else None
+            if bridge is None:
+                continue
+            now=time.monotonic()
+            if self.delivery_capabilities.get(item['place'],0)<=now:
+                if self.delivery_probe_at.get(item['place'],0)<=now:
+                    self.delivery_probe_at[item['place']]=now+10
+                    # 7.8.x understands file_probe and does not put it into
+                    # chat history. Only 7.9+ returns the additional proof.
+                    bridge.send({'kind':'file_probe','transfer_id':item['id'],
+                                 'delivery_capability':'v1'})
+                continue
+            self.delivery_outbox.mark_attempt(item['id'])
+            bridge.send_encrypted(item['ciphertext'])
+        if self.chat:
+            self.chat.update_delivery_count()
+
+    def queue_reliable_text(self,peer,payload):
+        if not isinstance(payload,dict) or payload.get('kind')!='text':
+            return False
+        if peer=='legacy':
+            if not self.remote_config:return False
+            place=self.cursor_place
+            secret=self.remote_pair
+        else:
+            cfg,place,secret=self.peer_channel(peer)
+            if not cfg:return False
+        try:
+            self.delivery_outbox.enqueue(place,peer,secret,payload)
+        except ValueError as exc:
+            self.toast.pop('Очередь доставки: '+str(exc)[:100])
+            return False
+        if self.chat:
+            self.chat.update_delivery_count()
+        self.toast.pop('В очереди · ждём подтверждения второго устройства')
+        return True
+
     def process_file_packet(self,decoded,record,direction,bridge,place,secret):
         """Consume transport control packets; do not cache chunks in history."""
         kind=decoded.get('kind')
         if kind=='file_probe':
             if direction=='in':
-                bridge.send({'kind':'file_ack','transfer_id':decoded['transfer_id'],
-                             'index':-1})
+                if decoded.get('delivery_capability')=='v1':
+                    bridge.send({'kind':'delivery_ack',
+                                 'delivery_id':decoded['transfer_id'],
+                                 'mode':'probe'})
+                else:
+                    bridge.send({'kind':'file_ack','transfer_id':decoded['transfer_id'],
+                                 'index':-1})
             return True
         if kind=='file_ack':
             if direction=='in':
@@ -2993,6 +3111,8 @@ class OrbitApp:
                     self.chat.refresh_dialog_list()
 
     def send_to_peer(self,peer,payload):
+        if payload.get('kind')=='text' and payload.get('origin')!='workspace':
+            return self.queue_reliable_text(peer,payload)
         if self.offline:return False
         if payload.get('origin')!='workspace':self.analytics.record('file_out' if payload.get('kind')=='file' else 'chat_out')
         if peer=='legacy' and self.remote_config:
@@ -3002,6 +3122,9 @@ class OrbitApp:
         bridge.send(payload);return True
 
     def send_to_active(self,payload):
+        if payload.get('kind')=='text' and payload.get('origin')!='workspace':
+            peer=self.selected_peer if self.selected_peer in self.identity.trusted else 'legacy'
+            return self.queue_reliable_text(peer,payload)
         if not self.offline:self.analytics.record('file_out' if payload.get('kind')=='file' else 'chat_out')
         if self.offline:
             self.toast.pop('Оффлайн: отправка отключена')
@@ -3093,6 +3216,8 @@ class OrbitApp:
                     if decoded.get('origin')=='workspace':
                         if direction=='in':self.handle_workspace_message(ident,decoded)
                         continue
+                    if self.process_delivery_packet(decoded,record,direction,bridge,place,key,ident):
+                        continue
                     if self.process_file_packet(decoded,record,direction,bridge,place,key):
                         continue
                     if self.store.put(place,record,direction):
@@ -3164,6 +3289,7 @@ class OrbitApp:
             self.keepalive_stop.wait(10)
 
     def pump_events(self):
+        self.drain_delivery_outbox()
         self.process_file_sender_events()
         self.pump_directory()
         self.process_peer_events()
@@ -3193,6 +3319,9 @@ class OrbitApp:
                 direction='out' if record.get('device')==self.device else 'in'
                 try:decoded=decrypt_message(record['payload'],self.remote_pair)
                 except Exception:decoded={}
+                if self.process_delivery_packet(decoded,record,direction,
+                                                self.bridge,self.cursor_place,self.remote_pair):
+                    continue
                 if self.process_file_packet(decoded,record,direction,
                                             self.bridge,self.cursor_place,self.remote_pair):
                     continue
