@@ -1223,7 +1223,7 @@ class MessageBubble(QFrame):
         # so the bubble never changes height when action buttons appear.
         foot=QHBoxLayout();foot.setContentsMargins(0,0,0,0);foot.setSpacing(0)
         foot.addStretch(1)
-        when=QLabel(('✓ ' if own else '')+stamp)
+        when=QLabel((('✓✓ ' if content.get('_delivered') else '◷ ') if own and content.get('delivery_id') else ('✓ ' if own else ''))+stamp)
         when.setStyleSheet('color:'+theme['muted']+';font-size:9px;')
         foot.addWidget(when)
         inner.addLayout(foot)
@@ -1763,6 +1763,8 @@ class ChatWindow(QWidget):
                     and not record.get('saved_path')):
                 saved=self.app.save_incoming_attachment(place,record,content)
                 if saved:record['saved_path']=str(saved)
+            if record.get('delivery_id'):
+                content['_delivered']=bool(record.get('delivered'))
             origin=content.get('origin','clipboard' if content.get('kind') in ('file','file_ref') else 'chat')
             if channel!='all' and channel!=origin:continue
             if needle and needle not in (str(content.get('text',''))+' '+str(content.get('name',''))).casefold():continue
@@ -2944,7 +2946,7 @@ class OrbitApp:
         self.toast.pop('Файл передаётся частями; получатель должен быть онлайн')
         return tid
 
-    def process_delivery_packet(self,decoded,record,direction,bridge,place,secret):
+    def process_delivery_packet(self,decoded,record,direction,bridge,place,secret,peer_id='legacy'):
         kind=decoded.get('kind')
         if kind=='delivery_ack':
             if direction=='in':
@@ -2966,8 +2968,7 @@ class OrbitApp:
         local['payload']=encrypt_message(content,secret)
         if self.store.put(place,local,direction,delivery_id=uid):
             if direction=='in':
-                self.note_incoming(self.selected_peer if self.selected_peer in
-                                   self.identity.trusted else 'legacy','text')
+                self.note_incoming(peer_id,'text')
             if self.chat and self.chat.isVisible():
                 self.chat.refresh_dialog_list()
                 self.chat.refresh_messages()
@@ -3196,7 +3197,7 @@ class OrbitApp:
                     if decoded.get('origin')=='workspace':
                         if direction=='in':self.handle_workspace_message(ident,decoded)
                         continue
-                    if self.process_delivery_packet(decoded,record,direction,bridge,place,key):
+                    if self.process_delivery_packet(decoded,record,direction,bridge,place,key,ident):
                         continue
                     if self.process_file_packet(decoded,record,direction,bridge,place,key):
                         continue
