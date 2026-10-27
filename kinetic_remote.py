@@ -65,9 +65,9 @@ def decrypt_message(packet, pair_code):
     if not decompressor.eof or len(data) > MAX_PACKET_SIZE or decompressor.unconsumed_tail:
         raise ValueError('Слишком большой или повреждённый пакет')
     obj = json.loads(data.decode('utf-8'))
-    if not isinstance(obj, dict) or obj.get('kind') not in ('text', 'file', 'file_probe', 'file_chunk', 'file_ack', 'file_ref'):
+    if not isinstance(obj, dict) or obj.get('kind') not in ('text', 'file', 'file_probe', 'file_chunk', 'file_ack', 'file_ref', 'delivery_text', 'delivery_ack'):
         raise ValueError('Неизвестный формат сообщения')
-    if obj['kind'] == 'text' and (not isinstance(obj.get('text'), str) or len(obj['text']) > MAX_TEXT_SIZE):
+    if obj['kind'] in ('text','delivery_text') and (not isinstance(obj.get('text'), str) or len(obj['text']) > MAX_TEXT_SIZE):
         raise ValueError('Некорректный текст')
     if obj['kind'] == 'file':
         filename = obj.get('name')
@@ -80,6 +80,11 @@ def decrypt_message(packet, pair_code):
             raise ValueError('Файл слишком большой')
     if obj['kind'] in ('file_probe','file_chunk','file_ack','file_ref'):
         validate_control(obj)
+    if obj['kind'] in ('delivery_text','delivery_ack'):
+        identifier=obj.get('delivery_id')
+        if (not isinstance(identifier,str) or len(identifier)!=32
+                or any(ch not in '0123456789abcdef' for ch in identifier)):
+            raise ValueError('Некорректный идентификатор доставки')
     return obj
 
 
@@ -162,12 +167,15 @@ class MessageStore:
     def _save(self):
         private_write(self.path,{'version':5,'messages':self.rows})
 
-    def put(self,place,message,direction):
+    def put(self,place,message,direction,delivery_id=None):
         item_id=int(message['id'])
         if any(i.get('place')==place and int(i.get('id',0))==item_id for i in self.rows):return False
+        if delivery_id and any(i.get('place')==place and i.get('direction')==direction
+                               and i.get('delivery_id')==delivery_id for i in self.rows):
+            return False
         self.rows.insert(0,{'place':place,'id':item_id,'device':message.get('device',''),
              'ts':float(message.get('ts',time.time())),'payload':message['payload'],
-             'direction':direction})
+             'direction':direction, 'delivery_id':delivery_id or ''})
         counts={};fresh=[]
         for item in self.rows:
             key=item['place'];counts[key]=counts.get(key,0)+1
@@ -216,6 +224,12 @@ class RemoteBridge:
     def configure(self, config, device, cursor=0):
         self.tasks.put(('config',config,device,int(cursor)))
 
+    def send_encrypted(self,ciphertext):
+        if not self.online.is_set():
+            self.events.put(('error','Режим оффлайн: отправка отключена'))
+            return
+        self.tasks.put(('send_encrypted',ciphertext))
+
     def send(self, message):
         if not self.online.is_set():
             self.events.put(('error','Режим оффлайн: отправка отключена'))
@@ -232,7 +246,7 @@ class RemoteBridge:
             while True:
                 try: task=self.tasks.get_nowait()
                 except queue.Empty: break
-                if task[0]!='send':retained.append(task)
+                if task[0] not in ('send','send_encrypted'):retained.append(task)
             for task in retained:self.tasks.put(task)
 
     def stop(self):
@@ -259,9 +273,10 @@ class RemoteBridge:
                     last_error = None
                     next_poll = 0
                     self.events.put(('status','Подключение…'))
-                if task[0] == 'send' and config and self.online.is_set():
+                if task[0] in ('send','send_encrypted') and config and self.online.is_set():
                     try:
-                        encrypted = encrypt_message(task[1],config['pair'])
+                        encrypted = (task[1] if task[0]=='send_encrypted'
+                                     else encrypt_message(task[1],config['pair']))
                         answer = http_json(config,'POST','/v1/push',{
                             'room':config['room'],'device':device,'payload':encrypted})
                         entry = {'id':answer['id'],'ts':answer['ts'],
