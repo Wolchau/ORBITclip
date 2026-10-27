@@ -184,6 +184,18 @@ class MessageStore:
         self._save()
         return True
 
+    def mark_delivered(self,place,delivery_id):
+        if not delivery_id:return False
+        changed=False
+        for item in self.rows:
+            if (item.get('place')==place and item.get('direction')=='out'
+                    and item.get('delivery_id')==delivery_id
+                    and not item.get('delivered')):
+                item['delivered']=True
+                changed=True
+        if changed:self._save()
+        return changed
+
     def set_saved_path(self, place, item_id, path):
         """Bind an already received message to its downloaded local file."""
         for item in self.rows:
