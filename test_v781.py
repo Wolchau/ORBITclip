@@ -68,7 +68,7 @@ class ChainTests(unittest.TestCase):
         return prepare_chain_from_archives('7.8.1',self.app,archives,destination)
 
     def test_three_skipped_versions_in_one_transaction(self):
-        self.assertEqual(CLIENT_VERSION,'7.8.8')
+        self.assertEqual(CLIENT_VERSION,'7.9.0')
         plan,manifests=self.prepare()
         info,stages,chain=_plan_stages(plan)
         self.assertEqual(len(stages),3)
