@@ -15,6 +15,7 @@ from kinetic_remote import encrypt_message
 DEFAULT_FILE=Path.home()/'.orbitclip_outbox.json'
 MAX_QUEUE=80
 MAX_TOTAL_BYTES=4*1024*1024
+MAX_ITEM_BYTES=2*1024*1024
 MAX_TEXT=200_000
 RETRY_SECONDS=(4,10,25,60,150,300,600,900)
 
@@ -38,7 +39,7 @@ class DurableOutbox:
                         and isinstance(row.get('place'),str) and len(row['place'])==64
                         and isinstance(row.get('peer'),str) and len(row['peer'])<=64
                         and isinstance(row.get('ciphertext'),str)
-                        and len(row['ciphertext'])<=400_000
+                        and len(row['ciphertext'])<=MAX_ITEM_BYTES
                         and isinstance(row.get('created'),(int,float))
                         and isinstance(row.get('attempts'),int) and 0<=row['attempts']<=100_000
                         and isinstance(row.get('next_at'),(int,float))
@@ -65,6 +66,8 @@ class DurableOutbox:
         wire['kind']='delivery_text'
         wire['delivery_id']=uid
         packet=encrypt_message(wire,secret)
+        if len(packet)>MAX_ITEM_BYTES:
+            raise ValueError('Слишком большой фрагмент для надёжной очереди (до 2 МБ)')
         if sum(len(r['ciphertext']) for r in self.rows)+len(packet)>MAX_TOTAL_BYTES:
             raise ValueError('Суммарный размер очереди ограничен 4 МБ')
         t=time.time() if now is None else float(now)
