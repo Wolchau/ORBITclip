@@ -2262,6 +2262,8 @@ class OrbitApp:
         self.categories.normalize_item_categories(self.vault)
         self.store=MessageStore()
         self.delivery_outbox=DurableOutbox()
+        self.delivery_capabilities={}
+        self.delivery_probe_at={}
         self.attachment_errors=[]
         self.file_sender=FileSender()
         receive_root=QStandardPaths.writableLocation(QStandardPaths.DownloadLocation)
@@ -2949,6 +2951,9 @@ class OrbitApp:
     def process_delivery_packet(self,decoded,record,direction,bridge,place,secret,peer_id='legacy'):
         kind=decoded.get('kind')
         if kind=='delivery_ack':
+            if direction=='in' and decoded.get('mode')=='probe':
+                self.delivery_capabilities[place]=time.monotonic()+30
+                return True
             if direction=='in':
                 uid=decoded['delivery_id']
                 self.delivery_outbox.acknowledge(place,uid)
@@ -2991,6 +2996,15 @@ class OrbitApp:
                 bridge=self.peer_bridges.get(peer) if cfg and place==item['place'] else None
             if bridge is None:
                 continue
+            now=time.monotonic()
+            if self.delivery_capabilities.get(item['place'],0)<=now:
+                if self.delivery_probe_at.get(item['place'],0)<=now:
+                    self.delivery_probe_at[item['place']]=now+10
+                    # 7.8.x understands file_probe and does not put it into
+                    # chat history. Only 7.9+ returns the additional proof.
+                    bridge.send({'kind':'file_probe','transfer_id':item['id'],
+                                 'delivery_capability':'v1'})
+                continue
             self.delivery_outbox.mark_attempt(item['id'])
             bridge.send_encrypted(item['ciphertext'])
         if self.chat:
@@ -3021,8 +3035,13 @@ class OrbitApp:
         kind=decoded.get('kind')
         if kind=='file_probe':
             if direction=='in':
-                bridge.send({'kind':'file_ack','transfer_id':decoded['transfer_id'],
-                             'index':-1})
+                if decoded.get('delivery_capability')=='v1':
+                    bridge.send({'kind':'delivery_ack',
+                                 'delivery_id':decoded['transfer_id'],
+                                 'mode':'probe'})
+                else:
+                    bridge.send({'kind':'file_ack','transfer_id':decoded['transfer_id'],
+                                 'index':-1})
             return True
         if kind=='file_ack':
             if direction=='in':
