@@ -43,6 +43,18 @@ class OutboxTests(unittest.TestCase):
             decrypt_message(loaded.list()[0]['ciphertext'],PAIR)['kind'],
             "delivery_text")
 
+    def test_large_noncompressible_unicode_message_survives_restart(self):
+        import random
+        source=random.Random(40)
+        value=''.join(chr(source.randrange(0x4e00,0x9fff))
+                      for _ in range(195000))
+        uid=self.enqueue(value)
+        restored=DurableOutbox(self.path)
+        self.assertEqual(restored.pending_count(),1)
+        self.assertEqual(restored.list()[0]['id'],uid)
+        payload=decrypt_message(restored.list()[0]['ciphertext'],PAIR)
+        self.assertEqual(payload['text'],value)
+
     def test_offline_retry_and_explicit_ack(self):
         uid=self.enqueue(now=1234)
         self.assertEqual(len(self.box.due(now=1234)),1)
