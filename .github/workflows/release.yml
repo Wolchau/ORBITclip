@@ -27,7 +27,7 @@ jobs:
       - name: Build client and installer patch
         run: python tools/release_builder.py
       - name: Verify complete one-hop baseline before publication
-        run: python tools/verify_full_bundle.py dist/ORBITclip_CleanInstall_v7_8_8.zip
+        run: python tools/verify_full_bundle.py dist/ORBITclip_CleanInstall_v7_9_0.zip
       - name: Publish only if version not released
         shell: bash
         env:
