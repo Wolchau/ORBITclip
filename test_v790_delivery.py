@@ -26,7 +26,7 @@ class OutboxTests(unittest.TestCase):
                                {'kind':'text','text':text,'origin':'chat'},now)
 
     def test_new_version(self):
-        self.assertEqual(CLIENT_VERSION,'7.9.0')
+        self.assertEqual(CLIENT_VERSION,'7.10.0')
 
     def test_queue_persists_only_ciphertext_without_room_secret(self):
         uid=self.enqueue("confidential-93657")

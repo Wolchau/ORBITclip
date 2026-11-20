@@ -12,7 +12,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 from orbit_secret import seal_text, open_text
 
-MAX_TEXT_LENGTH = 200_000
+MAX_TEXT_LENGTH = 50 * 1024 * 1024  # measured as UTF-8 bytes below
+
+
+def fits_clipboard(text):
+    return isinstance(text, str) and len(text.encode('utf-8')) <= MAX_TEXT_LENGTH
 MAX_RECENT = 200  # Favorites are never automatically deleted
 STATE_FILE = Path.home() / '.chronochip_clipboard.json'
 SQL = re.compile(r'^\s*(?:--[^\n]*\n\s*)*(?:WITH|SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|EXPLAIN|MERGE|TRUNCATE|GRANT|REVOKE)\b', re.I)
@@ -109,7 +113,7 @@ class ClipboardVault:
             if not isinstance(entry,dict) or not isinstance(entry.get('text'),str):continue
             s=entry['text']
             encrypted=entry.get('encrypted') if isinstance(entry.get('encrypted'),dict) else None
-            if (not s and not encrypted) or len(s)>MAX_TEXT_LENGTH or (s and s in known):continue
+            if (not s and not encrypted) or not fits_clipboard(s) or (s and s in known):continue
             if s:known.add(s)
             try:ts=float(entry.get('ts',time.time()))
             except (ValueError,TypeError):ts=time.time()
@@ -142,7 +146,7 @@ class ClipboardVault:
         if save:self.save()
 
     def add(self,text,source_app=None):
-        if not isinstance(text,str) or not text or len(text)>MAX_TEXT_LENGTH:return None
+        if not isinstance(text,str) or not text or not fits_clipboard(text):return None
         prior=next((x for x in self.items if x['text']==text),None)
         if prior:self.items.remove(prior)
         item=prior or {'id':uuid.uuid4().hex,'text':text,'pinned':False,'hotkey':'',

@@ -26,7 +26,7 @@ jobs:
       - name: Verify full cumulative package and runtime manifest
         run: |
           python tools/release_builder.py
-          python tools/verify_full_bundle.py dist/ORBITclip_CleanInstall_v7_9_0.zip
+          python tools/verify_full_bundle.py dist/ORBITclip_CleanInstall_v7_10_0.zip
           python -m unittest -v test_v782_snapshot test_v783_extract test_v784_transfer test_v785_release_discovery test_v786_sql_semantics test_v787_sql_planner test_v788_history test_v790_delivery
 
   qt-drum:
@@ -66,7 +66,7 @@ jobs:
       - name: Build and verify portable one-hop full package
         run: |
           python tools/release_builder.py
-          python tools/verify_full_bundle.py dist/ORBITclip_CleanInstall_v7_9_0.zip
+          python tools/verify_full_bundle.py dist/ORBITclip_CleanInstall_v7_10_0.zip
           python -m unittest -v test_v782_snapshot test_v784_transfer
       - name: Cross-platform visual QImage rendering (no native popup)
         run: python -m unittest -v test_v763_visual_qt test_v770_qt test_v780_qt test_v783_qt test_v786_sql_qt test_v787_sql_qt test_v788_history_qt test_v790_qt

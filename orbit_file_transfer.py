@@ -20,7 +20,7 @@ import time
 
 from orbit_attachments import safe_attachment_name
 
-MAX_FILE_SIZE = 40 * 1024 * 1024
+MAX_FILE_SIZE = 50 * 1024 * 1024
 LEGACY_FILE_SIZE = 3 * 1024 * 1024
 CHUNK_BYTES = 2 * 1024 * 1024
 MAX_CHUNKS = (MAX_FILE_SIZE + CHUNK_BYTES - 1) // CHUNK_BYTES
