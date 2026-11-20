@@ -23,12 +23,12 @@ KEY='unit-test-'+'x'*30
 
 class TransferTests(unittest.TestCase):
     def test_bounds_and_legacy_message(self):
-        self.assertEqual(MAX_FILE_SIZE,40*MiB)
+        self.assertEqual(MAX_FILE_SIZE,50*MiB)
         self.assertEqual(LEGACY_FILE_SIZE,3*MiB)
-        self.assertEqual(MAX_CHUNKS,20)
+        self.assertEqual(MAX_CHUNKS,25)
         with tempfile.TemporaryDirectory() as root:
             path=Path(root)/'big.bin'
-            with path.open('wb') as stream:stream.truncate(40*MiB)
+            with path.open('wb') as stream:stream.truncate(50*MiB)
             valid,bad=validate_dropped_files([path])
             self.assertEqual(len(valid),1)
             self.assertEqual(bad,[])
@@ -36,19 +36,19 @@ class TransferTests(unittest.TestCase):
             valid,bad=validate_dropped_files([path])
             self.assertEqual(valid,[])
             self.assertEqual(len(bad),1)
-            self.assertIn('40',bad[0][1])
+            self.assertIn('50',bad[0][1])
         old={'kind':'file','name':'small.txt',
              'bytes':base64.b64encode(b'legacy').decode('ascii')}
         self.assertEqual(decrypt_message(encrypt_message(old,KEY),KEY),old)
 
-    def test_40_mebibyte_end_to_end_encrypted_chunks_and_local_integrity(self):
+    def test_50_mebibyte_end_to_end_encrypted_chunks_and_local_integrity(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             original=root/'send'/'example.bin'
             original.parent.mkdir()
             # High-entropy bytes prevent compression from hiding size mistakes.
             with original.open('wb') as out:
-                for _ in range(20):out.write(os.urandom(CHUNK_BYTES))
+                for _ in range(25):out.write(os.urandom(CHUNK_BYTES))
             receiver=FileReceiver(root/'receive')
             sender=FileSender(wait=.3,retries=2)
             delivered=[]
@@ -83,13 +83,13 @@ class TransferTests(unittest.TestCase):
                 if event[0] in ('complete','error'):break
             self.assertTrue(results, 'no events reported')
             self.assertEqual(results[-1][0],'complete',str(results[-1]))
-            self.assertEqual(results[-1][3],40*MiB)
+            self.assertEqual(results[-1][3],50*MiB)
             self.assertEqual(len(delivered),1)
-            self.assertEqual(delivered[0].stat().st_size,40*MiB)
+            self.assertEqual(delivered[0].stat().st_size,50*MiB)
             self.assertEqual(_digest_file(delivered[0]),_digest_file(original))
-            self.assertEqual(len(payload_sizes),20)
+            self.assertEqual(len(payload_sizes),25)
             self.assertTrue(all(v<7*MiB for v in payload_sizes))
-            self.assertEqual([x[3] for x in results if x[0]=='progress'],list(range(1,21)))
+            self.assertEqual([x[3] for x in results if x[0]=='progress'],list(range(1,26)))
             self.assertEqual(list((root/'receive'/'.orbitclip_incomplete').glob('*.part')),[])
 
     def test_lost_receipt_causes_retry_but_single_saved_file(self):

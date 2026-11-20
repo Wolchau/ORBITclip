@@ -230,6 +230,7 @@ class RemoteBridge:
         self.stopping = threading.Event()
         self.online = threading.Event()
         self.online.set()
+        self.server_storage = False
         self.thread = threading.Thread(target=self._run, daemon=True, name='kinetic-bridge')
         self.thread.start()
 
@@ -241,6 +242,9 @@ class RemoteBridge:
             self.events.put(('error','Режим оффлайн: отправка отключена'))
             return
         self.tasks.put(('send_encrypted',ciphertext))
+
+    def acknowledge_packet(self,packet_id):
+        self.tasks.put(('ack',int(packet_id)))
 
     def send(self, message):
         if not self.online.is_set():
@@ -282,6 +286,7 @@ class RemoteBridge:
                     break
                 if task[0] == 'config':
                     _, config, device, cursor = task
+                    self.server_storage = False
                     last_error = None
                     next_poll = 0
                     self.events.put(('status','Подключение…'))
@@ -289,13 +294,21 @@ class RemoteBridge:
                     try:
                         encrypted = (task[1] if task[0]=='send_encrypted'
                                      else encrypt_message(task[1],config['pair']))
-                        answer = http_json(config,'POST','/v1/push',{
-                            'room':config['room'],'device':device,'payload':encrypted})
+                        body={'room':config['room'],'device':device,'payload':encrypted}
+                        if task[0]=='send_encrypted' and config.get('target_device'):
+                            body.update(durable=True,target=config['target_device'])
+                        answer = http_json(config,'POST','/v1/push',body)
                         entry = {'id':answer['id'],'ts':answer['ts'],
                                  'device':device,'payload':encrypted}
                         self.events.put(('sent', entry, config['room']))
                     except Exception as exc:
                         self.events.put(('error','Отправка: ' + ('Получатель не в сети — сервер не хранит сообщения' if getattr(exc,'code',None)==409 else str(exc))))
+                if task[0]=='ack' and config and self.online.is_set():
+                    try:
+                        http_json(config,'POST','/v1/ack',{'room':config['room'],
+                                  'device':device,'id':task[1]})
+                    except Exception as exc:
+                        self.events.put(('error','Подтверждение серверу: '+str(exc)))
             if config and self.online.is_set() and time.monotonic() >= next_poll:
                 next_poll = time.monotonic() + 3
                 try:
@@ -314,6 +327,7 @@ class RemoteBridge:
                     if last_error is not None:
                         last_error = None
                     self.events.put(('status','Защищено · '+('устройства связаны' if answer.get('peers',0)>0 else 'ожидаем второе устройство')))
+                    self.server_storage=bool(answer.get('durable_text'))
                     if len(messages) >= 100:
                         next_poll = time.monotonic() + .1
                 except Exception as exc:

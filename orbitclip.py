@@ -70,6 +70,7 @@ from orbit_drum_preview import DrumLivePreview
 from orbit_update_ui import UpdateWindow
 from orbit_update import consume_status, log_update, read_history
 from orbit_messenger_ui import FileReviewDialog, validate_dropped_files
+from orbit_keyboard_layout import current_layout
 
 APP_NAME = 'ORBITclip'
 QT_CLIENT_VERSION = CLIENT_VERSION
@@ -227,6 +228,13 @@ class OrbitPill(QWidget):
         p.drawText(QRect(29,7,102,30),Qt.AlignVCenter|Qt.AlignLeft,today.strftime('%H:%M'))
         p.setFont(QFont('Arial',8,QFont.Medium));p.setPen(QColor('#93A9B7'))
         p.drawText(QRect(120,11,37,15), Qt.AlignRight|Qt.AlignVCenter,today.strftime('%d.%m'))
+        if self.app.show_layout_indicator and self.app.keyboard_layout:
+            changed=time.monotonic()<self.app.layout_flash_until
+            p.setPen(QColor('#10232D' if changed else '#D8F5EA'))
+            p.setBrush(QColor('#FFD166' if changed else '#355C64'))
+            p.drawRoundedRect(QRect(119,25,38,16),5,5)
+            p.setFont(QFont('Arial',8,QFont.Bold))
+            p.drawText(QRect(119,25,38,16),Qt.AlignCenter,self.app.keyboard_layout[:5])
         p.setPen(Qt.NoPen);p.setBrush(QColor('#344450'))
         p.drawRoundedRect(QRect(30,39,120,2),1,1)
         p.setBrush(QColor(self.app.palette['accent']));p.drawRoundedRect(QRect(30,39,max(3,int(120*today.second/60)),2),1,1)
@@ -280,6 +288,8 @@ class OrbitPill(QWidget):
             menu.addAction('Уведомления…',self.app.open_notification_center)
             menu.addAction('Моя аналитика…',self.app.open_analytics)
             menu.addAction('Настройки…',self.app.open_settings)
+            menu.addAction('Показывать раскладку в часах',self.app.toggle_layout_indicator).setCheckable(True)
+            menu.actions()[-1].setChecked(self.app.show_layout_indicator)
             menu.addAction('Настроить прокрутку',self.app.edit_scroll_settings)
             menu.addAction('Диагностика Ctrl + колесо',self.app.wheel_diagnostics)
             menu.addAction('Перезапустить перехват',self.app.restart_wheel)
@@ -1156,10 +1166,10 @@ class MessageBubble(QFrame):
             f'QFrame#chatBubble{{background:{shade};border:1px solid '+
             (QColor(theme['accent']).darker(180).name() if own else theme['border'])+
             ';border-radius:17px;} QLabel{border:0;background:transparent;}')
-        self.setMaximumWidth(475)
+        self.setMaximumWidth(520)
         self.setMinimumWidth(140)
         self.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Preferred)
-        inner=QVBoxLayout(self);inner.setContentsMargins(14,7 if grouped else 10,14,8);inner.setSpacing(4)
+        inner=QVBoxLayout(self);inner.setContentsMargins(11,5 if grouped else 7,11,5);inner.setSpacing(2)
         if not own and sender and not grouped:
             who=QLabel(sender)
             who.setStyleSheet('color:'+theme['accent']+';font-size:10px;font-weight:600;')
@@ -1395,7 +1405,7 @@ class ChatWindow(QWidget):
     def build_chat(self):
         page=QWidget()
         outer=QHBoxLayout(page);outer.setContentsMargins(0,2,0,0);outer.setSpacing(8)
-        sidebar=QFrame();sidebar.setObjectName('chatSidebar');sidebar.setFixedWidth(282)
+        sidebar=QFrame();sidebar.setObjectName('chatSidebar');sidebar.setFixedWidth(240)
         left=QVBoxLayout(sidebar);left.setContentsMargins(12,15,12,12);left.setSpacing(10)
         label_convos=QLabel('Диалоги');label_convos.setStyleSheet('font-weight:700;font-size:15px;');left.addWidget(label_convos)
         self.sidebar_search=QLineEdit()
@@ -1444,7 +1454,7 @@ class ChatWindow(QWidget):
         self.msg_scroll.setStyleSheet('QScrollArea#messageScroll{background:#14222D;border-radius:15px;border:0;}')
         self.msg_container=QWidget();self.msg_container.setStyleSheet('background:#14222D;')
         self.msg_layout=QVBoxLayout(self.msg_container)
-        self.msg_layout.setContentsMargins(18,12,18,12);self.msg_layout.setSpacing(5)
+        self.msg_layout.setContentsMargins(10,7,10,7);self.msg_layout.setSpacing(2)
         self.msg_scroll.setWidget(self.msg_container);right.addWidget(self.msg_scroll,1)
         self.reply_bar=QFrame();self.reply_bar.setObjectName('card')
         reply_layout=QHBoxLayout(self.reply_bar);reply_layout.setContentsMargins(10,5,6,5)
@@ -1454,12 +1464,12 @@ class ChatWindow(QWidget):
         self.reply_bar.hide();right.addWidget(self.reply_bar)
         composer=QFrame();composer.setObjectName('chatComposer')
         compose_row=QHBoxLayout(composer);compose_row.setContentsMargins(10,8,10,8);compose_row.setSpacing(8)
-        compose_row.addWidget(tool('document','Прикрепить файл (до 40 МБ)',self.send_file))
+        compose_row.addWidget(tool('document','Прикрепить файл (до 50 МБ)',self.send_file))
         compose_row.addWidget(tool('clipboard','Отправить содержимое буфера',self.send_clipboard))
         self.compose=ChatComposer(self.send_text,file_callback=self.send_files)
         self.compose.setObjectName('chatInput')
         self.compose.setPlaceholderText('Написать сообщение…  ·  Перетащи файлы сюда')
-        self.compose.setFixedHeight(58)
+        self.compose.setFixedHeight(48)
         self.compose.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         compose_row.addWidget(self.compose,1)
         compose_row.addWidget(tool('favorite','Эмодзи',self.open_emoji))
@@ -1467,7 +1477,7 @@ class ChatWindow(QWidget):
         self.send_button.setFixedSize(44,43)
         compose_row.addWidget(self.send_button)
         right.addWidget(composer)
-        footer=label('🔒 Шифрованный обмен · Перетащи файл в окно переписки · До 3 МБ на файл')
+        footer=label('🔒 Шифрованный обмен · Перетащи файл в окно переписки · До 50 МБ на файл')
         right.addWidget(footer)
         outer.addLayout(right,1)
         self.pages.addWidget(page)
@@ -1771,7 +1781,7 @@ class ChatWindow(QWidget):
             day=datetime.fromtimestamp(record['ts']).strftime('%d.%m.%Y')
             if day!=current_date:
                 day_lbl=QLabel(day);day_lbl.setAlignment(Qt.AlignCenter)
-                day_lbl.setStyleSheet('color:#8DA6B4;font-size:10px;margin:7px 0 5px;')
+                day_lbl.setStyleSheet('color:#8DA6B4;font-size:10px;margin:4px 0 2px;')
                 self.msg_layout.addWidget(day_lbl);current_date=day
             own=record.get('direction')=='out'
             direction=record.get('direction')
@@ -1873,7 +1883,7 @@ class ChatWindow(QWidget):
         self.app.send_to_active({'kind':'text','text':value,'origin':'clipboard'})
 
     def send_file(self):
-        file,_=QFileDialog.getOpenFileName(self,'Отправить файл (до 40 МБ)')
+        file,_=QFileDialog.getOpenFileName(self,'Отправить файл (до 50 МБ)')
         if file:self.send_files([file])
 
     def send_files(self,paths):
@@ -1881,7 +1891,7 @@ class ChatWindow(QWidget):
         if not self.app.active_channel()[0]:return error(self,'Сначала выбери получателя')
         valid,rejected=validate_dropped_files(paths)
         if not valid:
-            return error(self,'Нет подходящих файлов. Максимальный размер каждого — 40 МБ.')
+            return error(self,'Нет подходящих файлов. Максимальный размер каждого — 50 МБ.')
         review=FileReviewDialog(valid,rejected,self)
         if review.exec()!=QDialog.Accepted:
             return
@@ -2267,7 +2277,7 @@ class OrbitApp:
         self.attachment_errors=[]
         self.file_sender=FileSender()
         receive_root=QStandardPaths.writableLocation(QStandardPaths.DownloadLocation)
-        self.file_receiver=FileReceiver((Path(receive_root) if receive_root else Path.home()/'Downloads')/'ORBITclip')
+        self.file_receiver=FileReceiver(Path(receive_root) if receive_root else Path.home()/'Downloads')
         self.url,self.token=resolve_connection_settings(self.settings,ROOT/'client_defaults.json',DEFAULT_RELAY_URL)
         self.tls_pin=str(self.settings.get('https_tls_pin') or self.settings.get('remote_tls_pin') or '')
         self.remote_pair=str(self.settings.get('remote_pair') or self.settings.get('https_pair') or '')
@@ -2329,6 +2339,13 @@ class OrbitApp:
         raw_unread=self.settings.get('unread_peers',{})
         self.unread_peers={str(k):max(0,int(v)) for k,v in raw_unread.items() if isinstance(k,str) and isinstance(v,int) and not isinstance(v,bool)} if isinstance(raw_unread,dict) else {}
         self.clock=OrbitPill(self)
+        self.show_layout_indicator=bool(self.settings.get('show_layout_indicator',False))
+        self.keyboard_layout=''
+        self.layout_flash_until=0.0
+        self.layout_timer=QTimer()
+        self.layout_timer.timeout.connect(self.refresh_keyboard_layout)
+        self.layout_timer.start(350)
+        self.refresh_keyboard_layout()
         self.clock.setToolTip('ORBITclip v'+CLIENT_VERSION)
         if platform.system()=='Windows':
             self.create_windows_tray()
@@ -2645,8 +2662,25 @@ class OrbitApp:
                              selected_peer=self.selected_peer,peer_cursors=self.peer_cursors,
                              offline_mode=self.offline,paste_on_release=self.paste_on_release,
                              excluded_apps=self.excluded_apps,
-                             hide_clock_windows=self.hide_clock_windows,unread_peers=self.unread_peers,tour_seen=self.tour_seen)
+                             hide_clock_windows=self.hide_clock_windows,unread_peers=self.unread_peers,tour_seen=self.tour_seen,
+                             show_layout_indicator=self.show_layout_indicator)
         private_write(SETTINGS_FILE,self.settings)
+
+    def toggle_layout_indicator(self):
+        self.show_layout_indicator=not self.show_layout_indicator
+        self.save_settings()
+        self.clock.update()
+
+    def refresh_keyboard_layout(self):
+        if not self.show_layout_indicator:
+            return
+        value=current_layout()
+        if value and value!=self.keyboard_layout:
+            if self.keyboard_layout:
+                self.layout_flash_until=time.monotonic()+1.4
+                self.toast.pop('Раскладка: '+value)
+            self.keyboard_layout=value
+            self.clock.update()
 
     def copy_text(self,value):
         if not value:return
@@ -2912,6 +2946,7 @@ class OrbitApp:
         if not entry:return (None,'','')
         try:cfg=validate_config(self.url,self.token,entry['pair'],self.tls_pin)
         except ValueError:return (None,'','')
+        cfg['target_device']=peerid
         place=hashlib.sha256((self.url+'|'+cfg['room']).encode()).hexdigest()
         return (cfg,place,entry['pair'])
 
@@ -2929,7 +2964,7 @@ class OrbitApp:
             if cfg:
                 bridge=RemoteBridge()
                 bridge.set_online(not self.offline)
-                bridge.configure(cfg,self.device,int(self.peer_cursors.get(ident,0)))
+                bridge.configure(cfg,self.identity.id,int(self.peer_cursors.get(ident,0)))
                 self.peer_bridges[ident]=bridge
         if not self.selected_peer and self.identity.trusted:
             self.selected_peer=next(iter(self.identity.trusted))
@@ -2997,7 +3032,7 @@ class OrbitApp:
             if bridge is None:
                 continue
             now=time.monotonic()
-            if self.delivery_capabilities.get(item['place'],0)<=now:
+            if self.delivery_capabilities.get(item['place'],0)<=now and not getattr(bridge,'server_storage',False):
                 if self.delivery_probe_at.get(item['place'],0)<=now:
                     self.delivery_probe_at[item['place']]=now+10
                     # 7.8.x understands file_probe and does not put it into
@@ -3210,13 +3245,15 @@ class OrbitApp:
                 event=ev[0]
                 if event in ('received','sent') and cfg:
                     record=ev[1]
-                    direction='out' if record.get('device')==self.device else 'in'
+                    direction='out' if record.get('device') in (self.device,self.identity.id) else 'in'
                     try:decoded=decrypt_message(record['payload'],key)
                     except Exception:decoded={}
                     if decoded.get('origin')=='workspace':
                         if direction=='in':self.handle_workspace_message(ident,decoded)
                         continue
                     if self.process_delivery_packet(decoded,record,direction,bridge,place,key,ident):
+                        if direction=='in' and record.get('durable'):
+                            bridge.acknowledge_packet(record['id'])
                         continue
                     if self.process_file_packet(decoded,record,direction,bridge,place,key):
                         continue
@@ -3434,7 +3471,7 @@ class OrbitApp:
         try:
             folder=QStandardPaths.writableLocation(QStandardPaths.DownloadLocation)
             target=Path(folder) if folder else Path.home()/'Downloads'
-            saved=save_attachment(payload,target/'ORBITclip',MAX_FILE_SIZE)
+            saved=save_attachment(payload,target,MAX_FILE_SIZE)
             self.store.set_saved_path(place,record['id'],str(saved))
             self.analytics.record('file_in')
             return saved
